@@ -1,4 +1,3 @@
-// ... (Previous Includes remain the same) ...
 #include <Arduino.h>
 #include "CANBus_Driver.h"
 #include "LVGL_Driver.h"
@@ -6,10 +5,9 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include "freertos/queue.h"
-#include "images/tabby_needle.h"
 #include "images/tabby_tick.h"
 
-LV_IMG_DECLARE(tabby_needle);
+// Note: Image needle removed. We draw it now.
 LV_IMG_DECLARE(tabby_tick);
 
 QueueHandle_t canMsgQueue;
@@ -30,7 +28,7 @@ GaugeMode current_mode = MODE_BOOST;
 unsigned long last_cycle_time = 0;
 
 // CONSTANTS
-const int SCALE_TICKS_COUNT   = 9;
+const int SCALE_TICKS_COUNT = 9;
 const int BOOST_MIN = -15;
 const int BOOST_MAX = 30;
 const int AFR_MIN = 10;
@@ -39,14 +37,18 @@ const int AFR_MAX = 20;
 lv_obj_t *scale_ticks[SCALE_TICKS_COUNT];
 lv_obj_t *main_scr;
 lv_obj_t *scale;
-lv_obj_t *needle_img;
 lv_obj_t *mode_label;
 lv_obj_t *value_label;
 lv_obj_t *main_arc;
 
+// NEEDLE & PEAK
+lv_obj_t *drawn_needle; 
+lv_obj_t *peak_line;     
+float peak_value = -999; 
+
 bool receiving_data = false;
 volatile bool data_ready = false;
-static int previous_scale_value = BOOST_MIN; // Start at min
+static int previous_scale_value = BOOST_MIN;
 
 void drivers_init(void) {
   i2c_init();
@@ -56,13 +58,33 @@ void drivers_init(void) {
   lvgl_init();
 }
 
-static void set_needle_img_value(void * obj, int32_t v) {
-  lv_scale_set_image_needle_value(scale, needle_img, v);
+// --- CRITICAL FIX: Wrapper function for the needle animation ---
+void set_needle_line_value(void * obj, int32_t v) {
+    // 60 is the length of the needle in pixels
+    lv_scale_set_line_needle_value(scale, drawn_needle, 60, v);
+}
+
+void update_peak(float value) {
+    if (value > peak_value) {
+        peak_value = value;
+        
+        float min = (current_mode == MODE_BOOST) ? BOOST_MIN : AFR_MIN;
+        float max = (current_mode == MODE_BOOST) ? BOOST_MAX : AFR_MAX;
+        
+        float ratio = (peak_value - min) / (max - min);
+        if(ratio > 1.0f) ratio = 1.0f;
+        if(ratio < 0.0f) ratio = 0.0f;
+        
+        // 135 is start angle, 270 is range
+        int rotation = 135 + (int)(ratio * 270);
+        lv_image_set_rotation(peak_line, rotation * 10);
+    }
 }
 
 void update_visuals(float value) {
   lv_label_set_text_fmt(value_label, "%.1f", value);
-  
+  update_peak(value);
+
   lv_color_t color;
   if (current_mode == MODE_BOOST) {
     if (value <= 0) color = lv_palette_main(LV_PALETTE_BLUE);
@@ -73,18 +95,21 @@ void update_visuals(float value) {
     else color = lv_palette_main(LV_PALETTE_GREEN);
   }
   lv_obj_set_style_arc_color(main_arc, color, LV_PART_MAIN);
+  lv_obj_set_style_line_color(drawn_needle, color, 0); // Color match the needle!
 }
 
 void update_scale(void) {
   float target = (current_mode == MODE_BOOST) ? HaltechData.boost_psi : HaltechData.afr_gas;
   
-  // Direct set for responsiveness
   lv_anim_t anim;
   lv_anim_init(&anim);
   lv_anim_set_var(&anim, scale);
   lv_anim_set_values(&anim, previous_scale_value, (int)target);
   lv_anim_set_time(&anim, 100);
-  lv_anim_set_exec_cb(&anim, (lv_anim_exec_xcb_t)set_needle_img_value);
+  
+  // FIX: Use the wrapper function here
+  lv_anim_set_exec_cb(&anim, (lv_anim_exec_xcb_t) set_needle_line_value);
+  
   lv_anim_start(&anim);
   
   previous_scale_value = (int)target;
@@ -92,8 +117,6 @@ void update_scale(void) {
 }
 
 void needle_sweep() {
-  // Sweep from Min -> Max -> Min
-  // We use a long animation to show the full range
   lv_anim_t a;
   lv_anim_init(&a);
   lv_anim_set_var(&a, scale);
@@ -101,11 +124,12 @@ void needle_sweep() {
   lv_anim_set_time(&a, 1000);
   lv_anim_set_playback_time(&a, 1000);
   lv_anim_set_repeat_count(&a, 1);
-  lv_anim_set_exec_cb(&a, (lv_anim_exec_xcb_t)set_needle_img_value);
+  lv_anim_set_exec_cb(&a, (lv_anim_exec_xcb_t) set_needle_line_value);
   lv_anim_start(&a);
 }
 
 void switch_mode_ui() {
+  peak_value = -999;
   if (current_mode == MODE_BOOST) {
     lv_scale_set_range(scale, BOOST_MIN, BOOST_MAX);
     lv_label_set_text(mode_label, "BOOST");
@@ -114,13 +138,13 @@ void switch_mode_ui() {
     lv_label_set_text(mode_label, "AFR");
   }
 }
+
 void make_scale_ticks(void) {
   for (int i = 0; i < SCALE_TICKS_COUNT; i++) {
     scale_ticks[i] = lv_image_create(main_scr);
     lv_image_set_src(scale_ticks[i], &tabby_tick);
     lv_obj_align(scale_ticks[i], LV_ALIGN_CENTER, 0, 196);
     lv_image_set_pivot(scale_ticks[i], 14, -182);
-    // Adjusted rotation logic for 270 degree scale
     int rotation_angle = (i * (270 / (SCALE_TICKS_COUNT - 1))) * 10; 
     lv_image_set_rotation(scale_ticks[i], rotation_angle);
   }
@@ -132,23 +156,18 @@ void main_scr_ui(void) {
   lv_scale_set_mode(scale, LV_SCALE_MODE_ROUND_INNER);
   lv_obj_center(scale);
   lv_scale_set_range(scale, BOOST_MIN, BOOST_MAX);
-  
-  // ROTATION FIX: 270 degrees total, 135 degrees offset puts gap at bottom
   lv_scale_set_angle_range(scale, 270);
   lv_scale_set_rotation(scale, 135); 
   lv_obj_set_style_bg_opa(scale, LV_OPA_TRANSP, 0);
 
-  // Background Arc
   lv_obj_t *bg_arc = lv_arc_create(main_scr);
   lv_obj_set_size(bg_arc, 420, 420);
   lv_arc_set_bg_angles(bg_arc, 135, 135 + 270);
-  lv_arc_set_value(bg_arc, 0);
   lv_obj_center(bg_arc);
   lv_obj_set_style_arc_color(bg_arc, lv_color_make(30,30,30), LV_PART_MAIN);
   lv_obj_set_style_arc_width(bg_arc, 20, LV_PART_MAIN);
   lv_obj_remove_style(bg_arc, NULL, LV_PART_KNOB);
 
-  // Active Arc
   main_arc = lv_arc_create(main_scr);
   lv_obj_set_size(main_arc, 420, 420);
   lv_arc_set_bg_angles(main_arc, 135, 135 + 270);
@@ -160,30 +179,41 @@ void main_scr_ui(void) {
 
   make_scale_ticks();
 
-  // Needle
-  needle_img = lv_image_create(scale);
-  lv_image_set_src(needle_img, &tabby_needle);
-  lv_obj_align(needle_img, LV_ALIGN_CENTER, 108 - 40, 0);
-  lv_image_set_pivot(needle_img, 40, 36);
-
-  // Digital Value - BIG FONT
-  value_label = lv_label_create(main_scr);
-  lv_obj_set_style_text_color(value_label, lv_color_white(), 0);
+    // --- NEW NEEDLE CONFIGURATION ---
+  drawn_needle = lv_line_create(scale);
   
-  // Font selection logic...
+  // FLOATING NEEDLE: Starts at 140px from center, ends at 215px
+  // This leaves the middle clear and puts the needle over the ticks
+  static lv_point_precise_t needle_line_points[] = { {140, 0}, {215, 0} }; 
+  
+  lv_line_set_points(drawn_needle, needle_line_points, 2);
+  lv_obj_set_style_line_width(drawn_needle, 12, 0); // Make it thicker (12px)
+  lv_obj_set_style_line_rounded(drawn_needle, true, 0);
+  lv_obj_set_style_line_color(drawn_needle, lv_palette_main(LV_PALETTE_RED), 0);
+  
+  // PEAK HOLD
+  peak_line = lv_image_create(main_scr);
+  lv_image_set_src(peak_line, &tabby_tick);
+  lv_obj_align(peak_line, LV_ALIGN_CENTER, 0, 196); 
+  lv_image_set_pivot(peak_line, 14, -182);
+  lv_obj_set_style_image_recolor_opa(peak_line, 255, 0);
+  lv_obj_set_style_image_recolor(peak_line, lv_palette_main(LV_PALETTE_YELLOW), 0);
+
+  // Digital Value
+  value_label = lv_label_create(main_scr);
+  lv_obj_center(value_label);
+  lv_obj_set_style_text_color(value_label, lv_color_white(), 0);
   #ifdef LV_FONT_MONTSERRAT_48
     lv_obj_set_style_text_font(value_label, &lv_font_montserrat_48, 0);
   #else
     lv_obj_set_style_text_font(value_label, &lv_font_montserrat_20, 0);
   #endif
-  
   lv_label_set_text(value_label, "0.0");
-
-  // --- ZOOM & CENTER FIX ---
-  lv_obj_set_style_transform_zoom(value_label, 512, 0);            // 200% Zoom
-  lv_obj_set_style_transform_pivot_x(value_label, LV_PCT(50), 0);  // Pivot X: 50%
-  lv_obj_set_style_transform_pivot_y(value_label, LV_PCT(50), 0);  // Pivot Y: 50%
-  lv_obj_center(value_label);                                      // Re-center
+  
+  lv_obj_set_style_transform_zoom(value_label, 512, 0); 
+  lv_obj_set_style_transform_pivot_x(value_label, LV_PCT(50), 0);
+  lv_obj_set_style_transform_pivot_y(value_label, LV_PCT(50), 0);
+  lv_obj_center(value_label);
 
   mode_label = lv_label_create(main_scr);
   lv_obj_align(mode_label, LV_ALIGN_BOTTOM_MID, 0, -100);
@@ -244,7 +274,7 @@ void setup(void) {
   drivers_init();
   set_backlight(80);
   screens_init();
-  needle_sweep(); // <--- Watch this on startup!
+  needle_sweep(); 
   
   canMsgQueue = xQueueCreate(CAN_QUEUE_LENGTH, CAN_QUEUE_ITEM_SIZE);
   xTaskCreatePinnedToCore(receive_can_task, "RxCAN", 4096, NULL, 2, NULL, 1);

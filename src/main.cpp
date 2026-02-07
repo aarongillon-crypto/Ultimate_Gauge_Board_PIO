@@ -2,6 +2,8 @@
 #include "CANBus_Driver.h"
 #include "LVGL_Driver.h"
 #include "I2C_Driver.h"
+#include "Display_ST7701.h"
+#include "TCA9554PWR.h"
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include "freertos/queue.h"
@@ -563,7 +565,7 @@ void loop() {
       broadcast_presence();
   }
   
-  if (millis() - last_data_time > 20) { 
+  if (millis() - last_data_time > 33) { 
       unsigned long start = millis();
       last_data_time = start;
       if (test_mode_enabled) {

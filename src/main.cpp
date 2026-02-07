@@ -14,11 +14,12 @@
 // --- CONFIGURATION ---
 bool test_mode_enabled = false; 
 bool show_perf_stats = false; 
+bool peak_hold_enabled = true; // New Toggle
 
 enum GaugeMode { MODE_BOOST=0, MODE_AFR=1, MODE_WATER=2, MODE_OIL=3 };
 
 LV_FONT_DECLARE(dseg14_60); 
-LV_IMG_DECLARE(gauge_bg);
+// LV_IMG_DECLARE(gauge_bg);
 
 QueueHandle_t canMsgQueue;
 #define CAN_QUEUE_LENGTH 32
@@ -35,7 +36,7 @@ GaugeMode current_mode = MODE_BOOST;
 
 uint32_t text_color = 0xFFD700;
 uint32_t color_low = 0x2196F3, color_mid = 0x4CAF50, color_high = 0xF44336;
-uint32_t current_applied_text = 0; // FIXED: Added back
+uint32_t current_applied_text = 0;
 int current_brightness = 40;
 
 float displayed_val = 0.0; 
@@ -189,6 +190,9 @@ void handleRoot() {
   html += "</div>";
   
   html += "<div class='card'><h3>LOCAL GAUGE</h3>";
+  // PEAK TOGGLE
+  html += "<a href='/peak?p=" + String(!peak_hold_enabled) + "'><button class='btn'>Peak Hold: " + String(peak_hold_enabled?"ON":"OFF") + "</button></a><br>";
+  
   html += "<p>Mode: <strong>" + String(MODE_NAMES[current_mode]) + "</strong></p>";
   html += "<a href='/set?mode=0'><button class='btn-b'>Boost</button></a>";
   html += "<a href='/set?mode=1'><button class='btn-a'>AFR</button></a>";
@@ -251,9 +255,16 @@ void handleBright() {
         server.sendHeader("Location", "/"); server.send(303);
     }
 }
+void handlePeak() {
+    if (server.hasArg("p")) {
+        peak_hold_enabled = server.arg("p").toInt();
+        preferences.begin("gauge", false); preferences.putBool("peak", peak_hold_enabled); preferences.end();
+        server.sendHeader("Location", "/"); server.send(303);
+    }
+}
 void handleRemote() {
     if (server.hasArg("mac") && server.hasArg("mode")) {
-        String macStr = server.arg("mac");
+      String macStr = server.arg("mac");
         int m = server.arg("mode").toInt();
         uint8_t targetMac[6];
         for (int i = 0; i < 6; i++) { String byteStr = macStr.substring(i*2, i*2+2); targetMac[i] = (uint8_t) strtol(byteStr.c_str(), NULL, 16); }
@@ -274,12 +285,15 @@ void setup_wifi() {
   
   if (esp_now_init() != ESP_OK) return;
   esp_now_register_recv_cb(OnDataRecv);
+  
   server.on("/", handleRoot);
   server.on("/theme", handleTheme); server.on("/set", handleSet); server.on("/rem", handleRemote);
   server.on("/bright", handleBright); server.on("/test", handleTest); server.on("/stats", handleStats);
+  server.on("/peak", handlePeak); // NEW
   server.begin();
 }
 
+// --- UI ---
 void common_label_setup() {
     val_label_int = lv_label_create(lv_scr_act());
     lv_obj_set_style_text_font(val_label_int, &dseg14_60, 0);
@@ -304,10 +318,10 @@ void common_label_setup() {
 void load_current_style() {
     lv_obj_clean(lv_scr_act());
     
-    lv_obj_t * img = lv_image_create(lv_scr_act());
-    lv_image_set_src(img, &gauge_bg);
-    lv_obj_center(img);
-    lv_obj_set_style_image_opa(img, 50, 0);
+    //lv_obj_t * img = lv_image_create(lv_scr_act());
+    //lv_image_set_src(img, &gauge_bg);
+    //lv_obj_center(img);
+    //lv_obj_set_style_image_opa(img, 50, 0);
 
     // LINK ICON
     link_icon = lv_label_create(lv_scr_act());
@@ -317,9 +331,9 @@ void load_current_style() {
     lv_obj_align(link_icon, LV_ALIGN_BOTTOM_MID, 0, -120); 
     if(fleet_count == 0) lv_obj_add_flag(link_icon, LV_OBJ_FLAG_HIDDEN);
 
-    // PERF OVERLAY
+    // PERF OVERLAY (MOVED TO CENTER-TOP)
     perf_label = lv_label_create(lv_scr_act());
-    lv_obj_align(perf_label, LV_ALIGN_TOP_RIGHT, -10, 10);
+    lv_obj_align(perf_label, LV_ALIGN_CENTER, 0, -60); // Centered, slightly up
     lv_obj_set_style_text_color(perf_label, lv_color_white(), 0);
     lv_obj_set_style_bg_color(perf_label, lv_color_black(), 0);
     lv_obj_set_style_bg_opa(perf_label, 150, 0); 
@@ -361,6 +375,7 @@ void load_current_style() {
     lv_obj_set_style_radius(peak_dot, LV_RADIUS_CIRCLE, 0);
     lv_obj_set_style_bg_color(peak_dot, lv_color_white(), 0);
     lv_obj_set_pos(peak_dot, 0, 0);
+    if(!peak_hold_enabled) lv_obj_add_flag(peak_dot, LV_OBJ_FLAG_HIDDEN); // Initial State
     
     common_label_setup();
     lv_obj_align(mode_label, LV_ALIGN_BOTTOM_MID, 0, -80);
@@ -376,11 +391,16 @@ void update_ui(float val, float min, float max, float peak, lv_color_t color) {
     lv_arc_set_value(ring_arc, (int)(pct * 100));
     lv_obj_set_style_arc_color(ring_arc, color, LV_PART_INDICATOR);
 
-    float p_pct = (peak - min) / (max - min);
-    if(p_pct < 0) p_pct=0; if(p_pct > 1) p_pct=1;
-    float angle = 135 + (p_pct * 270.0);
-    float rad = angle * PI / 180.0;
-    lv_obj_set_pos(peak_dot, 240 + 235*cos(rad) - 6, 240 + 235*sin(rad) - 6);
+    if (peak_hold_enabled) {
+        float p_pct = (peak - min) / (max - min);
+        if(p_pct < 0) p_pct=0; if(p_pct > 1) p_pct=1;
+        float angle = 135 + (p_pct * 270.0);
+        float rad = angle * PI / 180.0;
+        lv_obj_set_pos(peak_dot, 240 + 235*cos(rad) - 6, 240 + 235*sin(rad) - 6);
+        lv_obj_clear_flag(peak_dot, LV_OBJ_FLAG_HIDDEN);
+    } else {
+        lv_obj_add_flag(peak_dot, LV_OBJ_FLAG_HIDDEN);
+    }
 }
 
 void update_gauge_master() {
@@ -400,8 +420,10 @@ void update_gauge_master() {
     if (abs(target_val - displayed_val) < 0.05) displayed_val = target_val;
     else displayed_val += (target_val - displayed_val) * 0.60;
 
-    if (target_val > peak_val) { peak_val = target_val; peak_timer = millis(); }
-    if (millis() - peak_timer > PEAK_HOLD_TIME) peak_val = target_val;
+    if (peak_hold_enabled) {
+        if (target_val > peak_val) { peak_val = target_val; peak_timer = millis(); }
+        if (millis() - peak_timer > PEAK_HOLD_TIME) peak_val = target_val;
+    }
 
     lv_color_t c = lv_color_hex(color_low);
     if (current_mode == MODE_BOOST) {
@@ -488,6 +510,7 @@ void setup() {
   color_mid  = preferences.getUInt("cm", 0x4CAF50);
   color_high = preferences.getUInt("ch", 0xF44336);
   current_brightness = preferences.getInt("bright", 40);
+  peak_hold_enabled = preferences.getBool("peak", true); // LOAD PEAK SETTING
   preferences.end();
 
   set_backlight(current_brightness);

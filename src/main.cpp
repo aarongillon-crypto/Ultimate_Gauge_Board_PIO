@@ -12,6 +12,7 @@
 #include <Preferences.h>
 #include <esp_now.h>
 #include <esp_wifi.h>
+#include <math.h>
 
 // --- CONFIGURATION ---
 bool test_mode_enabled = false; 
@@ -38,8 +39,14 @@ GaugeMode current_mode = MODE_BOOST;
 
 uint32_t text_color = 0xFFD700;
 uint32_t color_low = 0x2196F3, color_mid = 0x4CAF50, color_high = 0xF44336;
+uint32_t color_mode_label = 0x969696; // Mode label (gray)
+uint32_t color_link_icon = 0x00C851; // Connectivity icon (green)
+uint32_t color_bar_bg = 0x1E1E1E;    // Bar background (dark gray)
+uint32_t color_peak = 0xFFFFFF;      // Peak stripe (white)
+uint32_t color_background = 0x000000; // Screen background (black)
 uint32_t current_applied_text = 0;
 int current_brightness = 40;
+// Forward declarations
 
 float displayed_val = 0.0; 
 float target_val = 0.0;
@@ -77,7 +84,7 @@ lv_obj_t *val_label_int;
 lv_obj_t *val_label_dec;
 lv_obj_t *mode_label;
 lv_obj_t *link_icon; 
-lv_obj_t *ring_bg; lv_obj_t *ring_arc; lv_obj_t *peak_dot;
+lv_obj_t *bar; lv_obj_t *peak_dot;
 lv_obj_t *perf_label; 
 
 const float RANGES[4][2] = { {-15,30}, {8,22}, {0,120}, {0,100} };
@@ -140,6 +147,23 @@ void OnDataRecv(const esp_now_recv_info_t * info, const uint8_t *incomingData, i
     show_perf_stats = (pkt->value == 1);
     flag_stats_update = true;
   }
+  else if (pkt->type == 7) { 
+    // UI Colors broadcast
+    color_background = pkt->c1;
+    color_mode_label = pkt->c2;
+    color_link_icon = pkt->c3;
+    color_bar_bg = pkt->c4;
+    color_peak = (uint32_t)pkt->value;
+    preferences.begin("gauge", false);
+    preferences.putUInt("cbg", color_background);
+    preferences.putUInt("cml", color_mode_label);
+    preferences.putUInt("cli", color_link_icon);
+    preferences.putUInt("cbb", color_bar_bg);
+    preferences.putUInt("cp", color_peak);
+    preferences.end();
+    flag_theme_update = true;
+  }
+  
 }
 
 void broadcast_packet(EspNowPacket *pkt) {
@@ -169,6 +193,8 @@ void send_remote_command(uint8_t *targetMac, int newMode) {
   esp_now_send(targetMac, (uint8_t *) &pkt, sizeof(pkt));
 }
 
+
+
 String colorToHex(uint32_t color) {
   char buf[8]; snprintf(buf, sizeof(buf), "#%06X", color); return String(buf);
 }
@@ -184,7 +210,11 @@ void handleRoot() {
   html += "<h1>Fleet Config</h1>";
   html += "<p>Peers Found: " + String(fleet_count) + "</p>";
   
-  html += "<div class='card'><h3>UNIFIED THEME</h3><form action='/theme' method='get'><div><label>Text:</label><input type='color' name='ct' value='" + colorToHex(text_color) + "'></div><div><label>Low:</label><input type='color' name='cl' value='" + colorToHex(color_low) + "'></div><div><label>Mid:</label><input type='color' name='cm' value='" + colorToHex(color_mid) + "'></div><div><label>High:</label><input type='color' name='ch' value='" + colorToHex(color_high) + "'></div><button style='width:auto;margin-top:10px;background:#d32f2f;color:white;'>Apply to ALL</button></form></div>";
+  html += "<div class='card'><h3>DYNAMIC ELEMENTS</h3><form action='/theme' method='get'><div><label>Text:</label><input type='color' name='ct' value='" + colorToHex(text_color) + "'></div><div><label>Low:</label><input type='color' name='cl' value='" + colorToHex(color_low) + "'></div><div><label>Mid:</label><input type='color' name='cm' value='" + colorToHex(color_mid) + "'></div><div><label>High:</label><input type='color' name='ch' value='" + colorToHex(color_high) + "'></div><button style='width:auto;margin-top:10px;background:#d32f2f;color:white;'>Apply to ALL</button></form></div>";
+
+
+
+  html += "<div class='card'><h3>STATIC ELEMENTS</h3><form action='/uicolors' method='get'><div><label>Background:</label><input type='color' name='cbg' value='" + colorToHex(color_background) + "'></div><div><label>Mode Label:</label><input type='color' name='cml' value='" + colorToHex(color_mode_label) + "'></div><div><label>Link Icon:</label><input type='color' name='cli' value='" + colorToHex(color_link_icon) + "'></div><div><label>Bar BG:</label><input type='color' name='cbb' value='" + colorToHex(color_bar_bg) + "'></div><div><label>Peak Stripe:</label><input type='color' name='cp' value='" + colorToHex(color_peak) + "'></div><button style='width:auto;margin-top:10px;background:#2196F3;color:white;'>Apply to ALL</button></form></div>";
 
   html += "<div class='card'><h3>GLOBAL CONTROLS</h3><form action='/bright' method='get'><label>Brightness: </label><input type='range' name='b' min='10' max='100' value='" + String(current_brightness) + "' onchange='this.form.submit()'></form>";
   html += "<a href='/test?t=" + String(!test_mode_enabled) + "'><button class='btn'>Test Mode: " + String(test_mode_enabled?"ON":"OFF") + "</button></a>";
@@ -275,6 +305,34 @@ void handleRemote() {
     } else { server.send(400, "text/plain", "Bad Request"); }
 }
 
+void handleUIColors() {
+    if (server.hasArg("cbg")) {
+        color_background = hexToColor(server.arg("cbg"));
+        color_mode_label = hexToColor(server.arg("cml"));
+        color_link_icon = hexToColor(server.arg("cli"));
+        color_bar_bg = hexToColor(server.arg("cbb"));
+        color_peak = hexToColor(server.arg("cp"));
+        preferences.begin("gauge", false);
+        preferences.putUInt("cbg", color_background);
+        preferences.putUInt("cml", color_mode_label);
+        preferences.putUInt("cli", color_link_icon);
+        preferences.putUInt("cbb", color_bar_bg);
+        preferences.putUInt("cp", color_peak);
+        preferences.end();
+        // Broadcast UI colors to fleet
+        EspNowPacket pkt; 
+        pkt.type = 7;
+        pkt.c1 = color_background;
+        pkt.c2 = color_mode_label;
+        pkt.c3 = color_link_icon;
+        pkt.c4 = color_bar_bg;
+        pkt.value = (int)color_peak;
+        broadcast_packet(&pkt);
+        flag_theme_update = true;
+        server.sendHeader("Location", "/"); server.send(303);
+    }
+}
+
 void setup_wifi() {
   WiFi.mode(WIFI_AP_STA);
   esp_wifi_set_promiscuous(true);
@@ -291,21 +349,21 @@ void setup_wifi() {
   server.on("/", handleRoot);
   server.on("/theme", handleTheme); server.on("/set", handleSet); server.on("/rem", handleRemote);
   server.on("/bright", handleBright); server.on("/test", handleTest); server.on("/stats", handleStats);
-  server.on("/peak", handlePeak); // NEW
+  server.on("/peak", handlePeak); server.on("/uicolors", handleUIColors);
   server.begin();
 }
 
 // --- UI ---
 void common_label_setup() {
-    val_label_int = lv_label_create(lv_scr_act());
-    lv_obj_set_style_text_font(val_label_int, &dseg14_60, 0);
-    lv_obj_set_style_text_color(val_label_int, lv_color_hex(text_color), 0);
-    lv_obj_set_style_transform_zoom(val_label_int, 384, 0); 
+  val_label_int = lv_label_create(lv_scr_act());
+  lv_obj_set_style_text_color(val_label_int, lv_color_hex(text_color), 0);
+  lv_obj_set_style_transform_zoom(val_label_int, 384, 0);
+  lv_obj_set_style_clip_corner(val_label_int, true, 0);
 
-    val_label_dec = lv_label_create(lv_scr_act());
-    lv_obj_set_style_text_font(val_label_dec, &dseg14_60, 0);
-    lv_obj_set_style_text_color(val_label_dec, lv_color_hex(text_color), 0);
-    lv_obj_set_style_transform_zoom(val_label_dec, 384, 0); 
+  val_label_dec = lv_label_create(lv_scr_act());
+  lv_obj_set_style_text_color(val_label_dec, lv_color_hex(text_color), 0);
+  lv_obj_set_style_transform_zoom(val_label_dec, 384, 0);
+  lv_obj_set_style_clip_corner(val_label_dec, true, 0); 
 
     mode_label = lv_label_create(lv_scr_act());
     #ifdef LV_FONT_MONTSERRAT_28
@@ -313,12 +371,16 @@ void common_label_setup() {
     #else
     lv_obj_set_style_text_font(mode_label, &lv_font_montserrat_14, 0);
     #endif
-    lv_obj_set_style_text_color(mode_label, lv_color_make(150,150,150), 0);
+    lv_obj_set_style_text_color(mode_label, lv_color_hex(color_mode_label), 0);
     lv_label_set_text(mode_label, MODE_NAMES[current_mode]);
+    // Use default numeric font (dseg14_60)
+    lv_obj_set_style_text_font(val_label_int, &dseg14_60, 0);
+    lv_obj_set_style_text_font(val_label_dec, &dseg14_60, 0);
 }
 
 void load_current_style() {
     lv_obj_clean(lv_scr_act());
+    lv_obj_set_style_bg_color(lv_scr_act(), lv_color_hex(color_background), 0);
     
     //lv_obj_t * img = lv_image_create(lv_scr_act());
     //lv_image_set_src(img, &gauge_bg);
@@ -329,79 +391,89 @@ void load_current_style() {
     link_icon = lv_label_create(lv_scr_act());
     lv_obj_set_style_text_font(link_icon, &lv_font_montserrat_20, 0);
     lv_label_set_text(link_icon, LV_SYMBOL_WIFI);
-    lv_obj_set_style_text_color(link_icon, lv_palette_main(LV_PALETTE_GREEN), 0);
+    lv_obj_set_style_text_color(link_icon, lv_color_hex(color_link_icon), 0);
     lv_obj_align(link_icon, LV_ALIGN_BOTTOM_MID, 0, -120); 
     if(fleet_count == 0) lv_obj_add_flag(link_icon, LV_OBJ_FLAG_HIDDEN);
 
     // PERF OVERLAY (MOVED TO CENTER-TOP)
     perf_label = lv_label_create(lv_scr_act());
-    lv_obj_align(perf_label, LV_ALIGN_CENTER, 0, -60); // Centered, slightly up
+    lv_obj_align(perf_label, LV_ALIGN_CENTER, 0, -140); // Move performance monitor above main text
     lv_obj_set_style_text_color(perf_label, lv_color_white(), 0);
     lv_obj_set_style_bg_color(perf_label, lv_color_black(), 0);
     lv_obj_set_style_bg_opa(perf_label, 150, 0); 
     if(!show_perf_stats) lv_obj_add_flag(perf_label, LV_OBJ_FLAG_HIDDEN);
 
-    ring_bg = lv_arc_create(lv_scr_act());
-    lv_obj_set_size(ring_bg, 440, 440);
-    lv_arc_set_bg_angles(ring_bg, 135, 405);
-    lv_obj_center(ring_bg);
-    lv_obj_set_style_arc_width(ring_bg, 40, LV_PART_MAIN);
-    lv_obj_set_style_arc_color(ring_bg, lv_color_make(30,30,30), LV_PART_MAIN);
-    lv_obj_remove_style(ring_bg, NULL, LV_PART_KNOB);
-    lv_obj_set_style_arc_opa(ring_bg, 0, LV_PART_INDICATOR); 
+    // Use a horizontal bar instead of an arc to improve rendering performance
+    bar = lv_bar_create(lv_scr_act());
+    lv_obj_set_size(bar, 380, 48); // twice as thick
+    lv_obj_align(bar, LV_ALIGN_CENTER, 0, 40); // move bar up to avoid network icon overlap
+    lv_bar_set_range(bar, 0, 100);
+    lv_bar_set_value(bar, 0, LV_ANIM_OFF);
+    lv_obj_set_style_bg_color(bar, lv_color_hex(color_bar_bg), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(bar, 255, LV_PART_MAIN);
+    lv_obj_set_style_bg_color(bar, lv_color_make(0,0,0), LV_PART_INDICATOR);
+    lv_obj_set_style_bg_opa(bar, 255, LV_PART_INDICATOR);
+    lv_obj_set_style_pad_all(bar, 4, 0);
+    lv_obj_set_style_radius(bar, 4, LV_PART_MAIN);
+    lv_obj_set_style_radius(bar, 4, LV_PART_INDICATOR);
+    lv_obj_remove_style(bar, NULL, LV_PART_KNOB);
+    lv_obj_set_style_clip_corner(bar, true, LV_PART_MAIN);
+    lv_obj_set_style_clip_corner(bar, true, LV_PART_INDICATOR);
 
-    ring_arc = lv_arc_create(lv_scr_act());
-    lv_obj_set_size(ring_arc, 440, 440);
-    lv_arc_set_bg_angles(ring_arc, 135, 405);
-    lv_arc_set_rotation(ring_arc, 0);
-    lv_obj_center(ring_arc);
-    lv_obj_set_style_arc_width(ring_arc, 40, LV_PART_INDICATOR);
-    lv_obj_remove_style(ring_arc, NULL, LV_PART_KNOB);
-    lv_obj_set_style_arc_opa(ring_arc, 0, LV_PART_MAIN); 
-
-    for(int i=0; i<30; i++) {
-        float angle = 135 + (i * 270.0 / 29.0);
-        float rad = angle * PI / 180.0;
-        int x1 = 240 + (int)(180 * cos(rad)); int y1 = 240 + (int)(180 * sin(rad));
-        int x2 = 240 + (int)(260 * cos(rad)); int y2 = 240 + (int)(260 * sin(rad));
-        lv_obj_t * l = lv_line_create(lv_scr_act());
-        static lv_point_precise_t p[60]; 
-        p[i*2].x = x1; p[i*2].y = y1; p[i*2+1].x = x2; p[i*2+1].y = y2;
-        lv_line_set_points(l, &p[i*2], 2);
-        lv_obj_set_style_line_width(l, 6, 0);
-        lv_obj_set_style_line_color(l, lv_color_black(), 0);
-    }
-
+    // Create thin vertical stripe for peak hold indicator on the bar
     peak_dot = lv_obj_create(lv_scr_act());
-    lv_obj_set_size(peak_dot, 12, 12);
-    lv_obj_set_style_radius(peak_dot, LV_RADIUS_CIRCLE, 0);
-    lv_obj_set_style_bg_color(peak_dot, lv_color_white(), 0);
+    lv_obj_set_size(peak_dot, 4, 56); // thin vertical stripe that extends above/below bar
+    lv_obj_set_style_radius(peak_dot, 0, 0);
+    lv_obj_set_style_bg_color(peak_dot, lv_color_hex(color_peak), 0);
+    lv_obj_set_style_border_width(peak_dot, 0, 0);
+    lv_obj_set_style_clip_corner(peak_dot, true, 0);
     lv_obj_set_pos(peak_dot, 0, 0);
     if(!peak_hold_enabled) lv_obj_add_flag(peak_dot, LV_OBJ_FLAG_HIDDEN); // Initial State
     
     common_label_setup();
     lv_obj_align(mode_label, LV_ALIGN_BOTTOM_MID, 0, -80);
-    lv_obj_align(val_label_int, LV_ALIGN_CENTER, -15, 0);
-    lv_obj_align(val_label_dec, LV_ALIGN_CENTER, 15, 0);
+    lv_obj_align(val_label_int, LV_ALIGN_CENTER, -15, -140); // move main text well above the bar
+    lv_obj_align(val_label_dec, LV_ALIGN_CENTER, 15, -140);
     
     current_applied_text = 0; 
 }
 
-void update_ui(float val, float min, float max, float peak, lv_color_t color) {
+void update_ui(float val, float min, float max, float peak, uint32_t color_hex) {
     float pct = (val - min) / (max - min);
     if(pct < 0) pct=0; if(pct > 1) pct=1;
-    lv_arc_set_value(ring_arc, (int)(pct * 100));
-    lv_obj_set_style_arc_color(ring_arc, color, LV_PART_INDICATOR);
+    static int prev_bar_val = -1;
+    int new_bar_val = (int)(pct * 100);
+    if (new_bar_val != prev_bar_val) {
+        lv_bar_set_value(bar, new_bar_val, LV_ANIM_OFF);
+        prev_bar_val = new_bar_val;
+    }
+
+    static uint32_t prev_color = 0;
+    if (color_hex != prev_color) {
+        lv_obj_set_style_bg_color(bar, lv_color_hex(color_hex), LV_PART_INDICATOR);
+        prev_color = color_hex;
+    }
 
     if (peak_hold_enabled) {
-        float p_pct = (peak - min) / (max - min);
-        if(p_pct < 0) p_pct=0; if(p_pct > 1) p_pct=1;
-        float angle = 135 + (p_pct * 270.0);
-        float rad = angle * PI / 180.0;
-        lv_obj_set_pos(peak_dot, 240 + 235*cos(rad) - 6, 240 + 235*sin(rad) - 6);
-        lv_obj_clear_flag(peak_dot, LV_OBJ_FLAG_HIDDEN);
+      float p_pct = (peak - min) / (max - min);
+      if(p_pct < 0) p_pct=0; if(p_pct > 1) p_pct=1;
+      int bar_x = lv_obj_get_x(bar);
+      int bar_y = lv_obj_get_y(bar);
+      int bar_w = lv_obj_get_width(bar);
+      int px = bar_x + (int)(p_pct * bar_w) - (lv_obj_get_width(peak_dot)/2);
+      // Clamp peak stripe to stay within bar bounds
+      int peak_w = lv_obj_get_width(peak_dot);
+      if (px < bar_x) px = bar_x;
+      if (px + peak_w > bar_x + bar_w) px = bar_x + bar_w - peak_w;
+      int py = bar_y - 8; // center on bar
+      static int prev_px = -1, prev_py = -1;
+      if (px != prev_px || py != prev_py) {
+          lv_obj_set_pos(peak_dot, px, py);
+          prev_px = px; prev_py = py;
+      }
+      lv_obj_clear_flag(peak_dot, LV_OBJ_FLAG_HIDDEN);
     } else {
-        lv_obj_add_flag(peak_dot, LV_OBJ_FLAG_HIDDEN);
+      lv_obj_add_flag(peak_dot, LV_OBJ_FLAG_HIDDEN);
     }
 }
 
@@ -419,40 +491,69 @@ void update_gauge_master() {
       case MODE_OIL: target_val = HaltechData.oil_press_psi; break;
     }
 
-    if (abs(target_val - displayed_val) < 0.05) displayed_val = target_val;
-    else displayed_val += (target_val - displayed_val) * 0.60;
+    // Time-aware smoothing with a per-frame clamp to avoid large jumps
+    static unsigned long last_update_ms = 0;
+    unsigned long now_ms = millis();
+    float dt = last_update_ms ? (now_ms - last_update_ms) / 1000.0f : (1.0f/30.0f);
+    last_update_ms = now_ms;
+    float delta = target_val - displayed_val;
+    if (fabsf(delta) < 0.05f) {
+      displayed_val = target_val;
+    } else {
+      const float smoothing = 0.06f; // lower = smoother/slower
+      const float max_rate_per_sec = 40.0f; // units per second maximum change
+      float step = delta * smoothing;
+      float max_step = max_rate_per_sec * dt;
+      if (fabsf(step) > max_step) step = (step > 0) ? max_step : -max_step;
+      displayed_val += step;
+    }
 
     if (peak_hold_enabled) {
         if (target_val > peak_val) { peak_val = target_val; peak_timer = millis(); }
         if (millis() - peak_timer > PEAK_HOLD_TIME) peak_val = target_val;
     }
 
+    uint32_t color_hex = color_low;
     lv_color_t c = lv_color_hex(color_low);
     if (current_mode == MODE_BOOST) {
-        if(displayed_val < 0) c = lv_color_hex(color_low);
-        else if(displayed_val < 20) c = lv_color_hex(color_mid);
-        else c = lv_color_hex(color_high);
+        if(displayed_val < 0) { c = lv_color_hex(color_low); color_hex = color_low; }
+        else if(displayed_val < 20) { c = lv_color_hex(color_mid); color_hex = color_mid; }
+        else { c = lv_color_hex(color_high); color_hex = color_high; }
     } else if (current_mode == MODE_AFR) {
-        if(displayed_val < 11 || displayed_val > 16) c = lv_color_hex(color_high);
-        else c = lv_color_hex(color_mid);
+        if(displayed_val < 10) { c = lv_color_hex(color_low); color_hex = color_low; }
+        else if(displayed_val < 15) { c = lv_color_hex(color_mid); color_hex = color_mid; }
+        else { c = lv_color_hex(color_high); color_hex = color_high; }
     } else {
-        c = lv_color_hex(color_mid);
+        c = lv_color_hex(color_mid); color_hex = color_mid;
     }
 
     int i_part = (int)displayed_val;
     int d_part = abs((int)((displayed_val - i_part) * 10));
     char b1[16]; snprintf(b1, sizeof(b1), "%d", i_part);
     char b2[16]; snprintf(b2, sizeof(b2), ".%d", d_part);
-    lv_label_set_text(val_label_int, b1);
-    lv_label_set_text(val_label_dec, b2);
-    lv_obj_update_layout(val_label_int); lv_obj_update_layout(val_label_dec);
-    lv_obj_align(val_label_int, LV_ALIGN_CENTER, -(lv_obj_get_width(val_label_int)*0.75)-10, 0);
-    lv_obj_align(val_label_dec, LV_ALIGN_CENTER, (lv_obj_get_width(val_label_dec)*0.75)+10, 0);
+    static char prev_b1[16] = ""; static char prev_b2[16] = "";
+    if (strcmp(prev_b1, b1) != 0) {
+      lv_label_set_text(val_label_int, b1);
+      strncpy(prev_b1, b1, sizeof(prev_b1));
+    }
+    if (strcmp(prev_b2, b2) != 0) {
+      lv_label_set_text(val_label_dec, b2);
+      strncpy(prev_b2, b2, sizeof(prev_b2));
+    }
+    // Keep fixed alignment; only reposition when label widths change
+    static int prev_int_w = 0; static int prev_dec_w = 0;
+    int int_w = lv_obj_get_width(val_label_int);
+    int dec_w = lv_obj_get_width(val_label_dec);
+    if (int_w != prev_int_w || dec_w != prev_dec_w) {
+      prev_int_w = int_w; prev_dec_w = dec_w;
+      lv_obj_align(val_label_int, LV_ALIGN_CENTER, -(int_w*0.75)-10, -70);
+      lv_obj_align(val_label_dec, LV_ALIGN_CENTER, (dec_w*0.75)+10, -70);
+    }
 
     float min = RANGES[current_mode][0];
     float max = RANGES[current_mode][1];
     
-    update_ui(displayed_val, min, max, peak_val, c);
+    update_ui(displayed_val, min, max, peak_val, color_hex);
 }
 
 // --- CAN BUS ---
@@ -511,6 +612,11 @@ void setup() {
   color_low  = preferences.getUInt("cl", 0x2196F3);
   color_mid  = preferences.getUInt("cm", 0x4CAF50);
   color_high = preferences.getUInt("ch", 0xF44336);
+  color_background = preferences.getUInt("cbg", 0x000000);
+  color_mode_label = preferences.getUInt("cml", 0x969696);
+  color_link_icon = preferences.getUInt("cli", 0x00C851);
+  color_bar_bg = preferences.getUInt("cbb", 0x1E1E1E);
+  color_peak = preferences.getUInt("cp", 0xFFFFFF);
   current_brightness = preferences.getInt("bright", 40);
   peak_hold_enabled = preferences.getBool("peak", true); // LOAD PEAK SETTING
   preferences.end();
@@ -582,3 +688,4 @@ void loop() {
   yield();
   vTaskDelay(pdMS_TO_TICKS(5));
 }
+

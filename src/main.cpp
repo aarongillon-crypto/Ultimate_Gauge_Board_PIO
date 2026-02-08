@@ -4,6 +4,7 @@
 #include "I2C_Driver.h"
 #include "Display_ST7701.h"
 #include "TCA9554PWR.h"
+#include "BLE_Driver.h"
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include "freertos/queue.h"
@@ -645,6 +646,55 @@ void receive_can_task(void *arg) {
   }
 }
 
+// --- BLE CALLBACKS ---
+void onBLEModeChange(uint8_t newMode) {
+  if (newMode < 4) { // Validate mode
+    preferences.begin("gauge", false);
+    preferences.putInt("mode", newMode);
+    preferences.end();
+    flag_reboot = true; // Reboot to apply new mode
+  }
+}
+
+void onBLEColorChange(uint32_t text, uint32_t low, uint32_t mid, uint32_t high) {
+  text_color = text;
+  color_low = low;
+  color_mid = mid;
+  color_high = high;
+  preferences.begin("gauge", false);
+  preferences.putUInt("ct", text_color);
+  preferences.putUInt("cl", color_low);
+  preferences.putUInt("cm", color_mid);
+  preferences.putUInt("ch", color_high);
+  preferences.end();
+  flag_theme_update = true;
+}
+
+void onBLEBrightnessChange(uint8_t brightness) {
+  if (brightness >= 10 && brightness <= 100) { // Validate range
+    current_brightness = brightness;
+    preferences.begin("gauge", false);
+    preferences.putInt("bright", current_brightness);
+    preferences.end();
+    flag_bright_update = true;
+  }
+}
+
+void onBLEPeakHoldChange(bool enabled) {
+  peak_hold_enabled = enabled;
+  preferences.begin("gauge", false);
+  preferences.putBool("peak", peak_hold_enabled);
+  preferences.end();
+  // Update UI to show/hide peak indicator
+  if (peak_dot != nullptr) {
+    if (peak_hold_enabled) {
+      lv_obj_clear_flag(peak_dot, LV_OBJ_FLAG_HIDDEN);
+    } else {
+      lv_obj_add_flag(peak_dot, LV_OBJ_FLAG_HIDDEN);
+    }
+  }
+}
+
 void setup() {
   Serial.begin(115200);
   drivers_init();
@@ -666,10 +716,23 @@ void setup() {
   preferences.end();
 
   set_backlight(current_brightness);
-  load_current_style(); 
+  load_current_style();
 
   setup_wifi();
-  
+
+  // Initialize BLE
+  uint8_t mac[6];
+  WiFi.macAddress(mac);
+  char bleName[32];
+  snprintf(bleName, sizeof(bleName), "Haltech-%02X%02X", mac[4], mac[5]);
+  ble_init(bleName);
+
+  // Register BLE callbacks
+  ble_register_mode_callback(onBLEModeChange);
+  ble_register_color_callback(onBLEColorChange);
+  ble_register_brightness_callback(onBLEBrightnessChange);
+  ble_register_peak_hold_callback(onBLEPeakHoldChange);
+
   canMsgQueue = xQueueCreate(CAN_QUEUE_LENGTH, CAN_QUEUE_ITEM_SIZE);
   xTaskCreatePinnedToCore(receive_can_task, "RxCAN", 4096, NULL, 2, NULL, 1);
   xTaskCreatePinnedToCore(process_can_queue_task, "ProcCAN", 4096, NULL, 2, NULL, 1);
@@ -715,18 +778,26 @@ void loop() {
       broadcast_presence();
   }
   
-  if (millis() - last_data_time > 33) { 
+  if (millis() - last_data_time > 33) {
       unsigned long start = millis();
       last_data_time = start;
       if (test_mode_enabled) {
           static float t=0; t+=0.05;
-          HaltechData.boost_psi = -15 + (sin(t) + 1) * 22.5; 
-          HaltechData.afr_gas = 8 + (sin(t*0.5) + 1) * 7.0; 
-          HaltechData.water_temp_c = 50 + (sin(t*0.3) + 1) * 35.0; 
-          HaltechData.oil_press_psi = 10 + (sin(t*0.7) + 1) * 45.0; 
+          HaltechData.boost_psi = -15 + (sin(t) + 1) * 22.5;
+          HaltechData.afr_gas = 8 + (sin(t*0.5) + 1) * 7.0;
+          HaltechData.water_temp_c = 50 + (sin(t*0.3) + 1) * 35.0;
+          HaltechData.oil_press_psi = 10 + (sin(t*0.7) + 1) * 45.0;
       }
       update_gauge_master();
-      
+
+      // Update BLE with current gauge data (if connected)
+      if (ble_is_connected()) {
+          ble_update_gauge_value(displayed_val);
+          ble_update_gauge_mode((uint8_t)current_mode);
+          ble_update_peak_value(peak_val);
+          ble_update_rpm(HaltechData.rpm);
+      }
+
       if(show_perf_stats) perf_frame_ms = millis() - start;
   }
   yield();

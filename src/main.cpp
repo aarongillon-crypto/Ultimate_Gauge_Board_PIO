@@ -21,7 +21,9 @@ bool peak_hold_enabled = true; // New Toggle
 
 enum GaugeMode { MODE_BOOST=0, MODE_AFR=1, MODE_WATER=2, MODE_OIL=3 };
 
-LV_FONT_DECLARE(dseg14_60); 
+LV_FONT_DECLARE(dseg14_60);
+LV_FONT_DECLARE(dseg14_96);
+LV_FONT_DECLARE(dseg14_120)
 // LV_IMG_DECLARE(gauge_bg);
 
 QueueHandle_t canMsgQueue;
@@ -41,7 +43,7 @@ uint32_t text_color = 0xFFD700;
 uint32_t color_low = 0x2196F3, color_mid = 0x4CAF50, color_high = 0xF44336;
 uint32_t color_mode_label = 0x969696; // Mode label (gray)
 uint32_t color_link_icon = 0x00C851; // Connectivity icon (green)
-uint32_t color_bar_bg = 0x1E1E1E;    // Bar background (dark gray)
+uint32_t needle_color = 0xFF6600;     // Needle color (orange)
 uint32_t color_peak = 0xFFFFFF;      // Peak stripe (white)
 uint32_t color_background = 0x000000; // Screen background (black)
 uint32_t current_applied_text = 0;
@@ -85,7 +87,8 @@ lv_obj_t *val_label_dec;
 lv_obj_t *mode_label;
 lv_obj_t *link_icon; 
 lv_obj_t *bar; lv_obj_t *peak_dot;
-lv_obj_t *perf_label; 
+lv_obj_t *perf_label;
+lv_obj_t *needle_tip; 
 
 const float RANGES[4][2] = { {-15,30}, {8,22}, {0,120}, {0,100} };
 const char* MODE_NAMES[4] = { "BOOST", "AFR", "WATER", "OIL P" };
@@ -152,13 +155,13 @@ void OnDataRecv(const esp_now_recv_info_t * info, const uint8_t *incomingData, i
     color_background = pkt->c1;
     color_mode_label = pkt->c2;
     color_link_icon = pkt->c3;
-    color_bar_bg = pkt->c4;
+    needle_color = pkt->c4;
     color_peak = (uint32_t)pkt->value;
     preferences.begin("gauge", false);
     preferences.putUInt("cbg", color_background);
     preferences.putUInt("cml", color_mode_label);
     preferences.putUInt("cli", color_link_icon);
-    preferences.putUInt("cbb", color_bar_bg);
+    preferences.putUInt("cn", needle_color);
     preferences.putUInt("cp", color_peak);
     preferences.end();
     flag_theme_update = true;
@@ -214,7 +217,7 @@ void handleRoot() {
 
 
 
-  html += "<div class='card'><h3>STATIC ELEMENTS</h3><form action='/uicolors' method='get'><div><label>Background:</label><input type='color' name='cbg' value='" + colorToHex(color_background) + "'></div><div><label>Mode Label:</label><input type='color' name='cml' value='" + colorToHex(color_mode_label) + "'></div><div><label>Link Icon:</label><input type='color' name='cli' value='" + colorToHex(color_link_icon) + "'></div><div><label>Bar BG:</label><input type='color' name='cbb' value='" + colorToHex(color_bar_bg) + "'></div><div><label>Peak Stripe:</label><input type='color' name='cp' value='" + colorToHex(color_peak) + "'></div><button style='width:auto;margin-top:10px;background:#2196F3;color:white;'>Apply to ALL</button></form></div>";
+  html += "<div class='card'><h3>STATIC ELEMENTS</h3><form action='/uicolors' method='get'><div><label>Background:</label><input type='color' name='cbg' value='" + colorToHex(color_background) + "'></div><div><label>Mode Label:</label><input type='color' name='cml' value='" + colorToHex(color_mode_label) + "'></div><div><label>Link Icon:</label><input type='color' name='cli' value='" + colorToHex(color_link_icon) + "'></div><div><label>Needle:</label><input type='color' name='cn' value='" + colorToHex(needle_color) + "'></div><div><label>Peak Stripe:</label><input type='color' name='cp' value='" + colorToHex(color_peak) + "'></div><button style='width:auto;margin-top:10px;background:#2196F3;color:white;'>Apply to ALL</button></form></div>";
 
   html += "<div class='card'><h3>GLOBAL CONTROLS</h3><form action='/bright' method='get'><label>Brightness: </label><input type='range' name='b' min='10' max='100' value='" + String(current_brightness) + "' onchange='this.form.submit()'></form>";
   html += "<a href='/test?t=" + String(!test_mode_enabled) + "'><button class='btn'>Test Mode: " + String(test_mode_enabled?"ON":"OFF") + "</button></a>";
@@ -310,13 +313,13 @@ void handleUIColors() {
         color_background = hexToColor(server.arg("cbg"));
         color_mode_label = hexToColor(server.arg("cml"));
         color_link_icon = hexToColor(server.arg("cli"));
-        color_bar_bg = hexToColor(server.arg("cbb"));
+        needle_color = hexToColor(server.arg("cn"));
         color_peak = hexToColor(server.arg("cp"));
         preferences.begin("gauge", false);
         preferences.putUInt("cbg", color_background);
         preferences.putUInt("cml", color_mode_label);
         preferences.putUInt("cli", color_link_icon);
-        preferences.putUInt("cbb", color_bar_bg);
+        preferences.putUInt("cn", needle_color);
         preferences.putUInt("cp", color_peak);
         preferences.end();
         // Broadcast UI colors to fleet
@@ -325,7 +328,7 @@ void handleUIColors() {
         pkt.c1 = color_background;
         pkt.c2 = color_mode_label;
         pkt.c3 = color_link_icon;
-        pkt.c4 = color_bar_bg;
+        pkt.c4 = needle_color;
         pkt.value = (int)color_peak;
         broadcast_packet(&pkt);
         flag_theme_update = true;
@@ -357,13 +360,19 @@ void setup_wifi() {
 void common_label_setup() {
   val_label_int = lv_label_create(lv_scr_act());
   lv_obj_set_style_text_color(val_label_int, lv_color_hex(text_color), 0);
-  lv_obj_set_style_transform_zoom(val_label_int, 384, 0);
   lv_obj_set_style_clip_corner(val_label_int, true, 0);
 
   val_label_dec = lv_label_create(lv_scr_act());
   lv_obj_set_style_text_color(val_label_dec, lv_color_hex(text_color), 0);
-  lv_obj_set_style_transform_zoom(val_label_dec, 384, 0);
   lv_obj_set_style_clip_corner(val_label_dec, true, 0); 
+
+  // Reserve space for a single-digit decimal (one place) to avoid tearing
+  // lv_obj_set_width(val_label_dec, 64); // fixed width for ".X" (wider to avoid wrapping)
+  // Prevent LVGL from breaking the label into multiple lines; clip overflow instead
+  // lv_label_set_long_mode(val_label_dec, LV_LABEL_LONG_CLIP);
+  // Ensure label height can hold the large numeric font to avoid vertical clipping/wrapping
+  // lv_obj_set_height(val_label_dec, 140);
+  // lv_obj_set_style_text_align(val_label_dec, LV_TEXT_ALIGN_CENTER, 0);
 
     mode_label = lv_label_create(lv_scr_act());
     #ifdef LV_FONT_MONTSERRAT_28
@@ -373,9 +382,9 @@ void common_label_setup() {
     #endif
     lv_obj_set_style_text_color(mode_label, lv_color_hex(color_mode_label), 0);
     lv_label_set_text(mode_label, MODE_NAMES[current_mode]);
-    // Use default numeric font (dseg14_60)
-    lv_obj_set_style_text_font(val_label_int, &dseg14_60, 0);
-    lv_obj_set_style_text_font(val_label_dec, &dseg14_60, 0);
+    // Use native 96px dseg font (no transform needed)
+    lv_obj_set_style_text_font(val_label_int, &dseg14_120, 0);
+    lv_obj_set_style_text_font(val_label_dec, &dseg14_96, 0);
 }
 
 void load_current_style() {
@@ -392,7 +401,7 @@ void load_current_style() {
     lv_obj_set_style_text_font(link_icon, &lv_font_montserrat_20, 0);
     lv_label_set_text(link_icon, LV_SYMBOL_WIFI);
     lv_obj_set_style_text_color(link_icon, lv_color_hex(color_link_icon), 0);
-    lv_obj_align(link_icon, LV_ALIGN_BOTTOM_MID, 0, -120); 
+    lv_obj_align(link_icon, LV_ALIGN_BOTTOM_MID, 0, -80); 
     if(fleet_count == 0) lv_obj_add_flag(link_icon, LV_OBJ_FLAG_HIDDEN);
 
     // PERF OVERLAY (MOVED TO CENTER-TOP)
@@ -403,78 +412,108 @@ void load_current_style() {
     lv_obj_set_style_bg_opa(perf_label, 150, 0); 
     if(!show_perf_stats) lv_obj_add_flag(perf_label, LV_OBJ_FLAG_HIDDEN);
 
-    // Use a horizontal bar instead of an arc to improve rendering performance
-    bar = lv_bar_create(lv_scr_act());
-    lv_obj_set_size(bar, 380, 48); // twice as thick
-    lv_obj_align(bar, LV_ALIGN_CENTER, 0, 40); // move bar up to avoid network icon overlap
-    lv_bar_set_range(bar, 0, 100);
-    lv_bar_set_value(bar, 0, LV_ANIM_OFF);
-    lv_obj_set_style_bg_color(bar, lv_color_hex(color_bar_bg), LV_PART_MAIN);
-    lv_obj_set_style_bg_opa(bar, 255, LV_PART_MAIN);
-    lv_obj_set_style_bg_color(bar, lv_color_make(0,0,0), LV_PART_INDICATOR);
-    lv_obj_set_style_bg_opa(bar, 255, LV_PART_INDICATOR);
-    lv_obj_set_style_pad_all(bar, 4, 0);
-    lv_obj_set_style_radius(bar, 4, LV_PART_MAIN);
-    lv_obj_set_style_radius(bar, 4, LV_PART_INDICATOR);
-    lv_obj_remove_style(bar, NULL, LV_PART_KNOB);
-    lv_obj_set_style_clip_corner(bar, true, LV_PART_MAIN);
-    lv_obj_set_style_clip_corner(bar, true, LV_PART_INDICATOR);
+    // === STATIC RING INDICATOR (outer border, color-changing) ===
+    bar = lv_obj_create(lv_scr_act());
+    const int ring_size = 480; // square (w == h)
+    lv_obj_set_size(bar, ring_size, ring_size);  // Fill most of screen
+    lv_obj_align(bar, LV_ALIGN_CENTER, 0, 0);
+    lv_obj_set_style_bg_opa(bar, LV_OPA_TRANSP, 0);  // Transparent background
+    lv_obj_set_style_pad_all(bar, 0, 0);
+    lv_obj_set_style_border_width(bar, 16, 0);  // Thick border for ring
+    lv_obj_set_style_border_color(bar, lv_color_hex(color_low), 0);  // Start with low color
+    lv_obj_set_style_border_side(bar, LV_BORDER_SIDE_FULL, 0);
+    lv_obj_set_style_radius(bar, ring_size / 2, 0);  // Full circle (half of size)
+    
+    // COMMENTED OUT: Horizontal bar UI
+    // bar = lv_bar_create(lv_scr_act());
+    // lv_obj_set_size(bar, 380, 48); // twice as thick
+    // lv_obj_align(bar, LV_ALIGN_CENTER, 0, 40); // move bar up to avoid network icon overlap
+    // lv_bar_set_range(bar, 0, 100);
+    // lv_bar_set_value(bar, 0, LV_ANIM_OFF);
+    // lv_obj_set_style_bg_color(bar, lv_color_hex(color_bar_bg), LV_PART_MAIN);
+    // lv_obj_set_style_bg_opa(bar, 255, LV_PART_MAIN);
+    // lv_obj_set_style_bg_color(bar, lv_color_make(0,0,0), LV_PART_INDICATOR);
+    // lv_obj_set_style_bg_opa(bar, 255, LV_PART_INDICATOR);
+    // lv_obj_set_style_pad_all(bar, 4, 0);
+    // lv_obj_set_style_radius(bar, 4, LV_PART_MAIN);
+    // lv_obj_set_style_radius(bar, 4, LV_PART_INDICATOR);
+    // lv_obj_remove_style(bar, NULL, LV_PART_KNOB);
+    // lv_obj_set_style_clip_corner(bar, true, LV_PART_MAIN);
+    // lv_obj_set_style_clip_corner(bar, true, LV_PART_INDICATOR);
+    
 
-    // Create thin vertical stripe for peak hold indicator on the bar
+    // COMMENTED OUT: Peak hold stripe
+    // peak_dot = lv_obj_create(lv_scr_act());
+    // lv_obj_set_size(peak_dot, 4, 56); // thin vertical stripe that extends above/below bar
     peak_dot = lv_obj_create(lv_scr_act());
-    lv_obj_set_size(peak_dot, 4, 56); // thin vertical stripe that extends above/below bar
-    lv_obj_set_style_radius(peak_dot, 0, 0);
+    lv_obj_set_size(peak_dot, 8, 8);  // Small indicator dot (hidden for now)
+    lv_obj_set_style_radius(peak_dot, 4, 0);
     lv_obj_set_style_bg_color(peak_dot, lv_color_hex(color_peak), 0);
     lv_obj_set_style_border_width(peak_dot, 0, 0);
-    lv_obj_set_style_clip_corner(peak_dot, true, 0);
     lv_obj_set_pos(peak_dot, 0, 0);
     if(!peak_hold_enabled) lv_obj_add_flag(peak_dot, LV_OBJ_FLAG_HIDDEN); // Initial State
     
+    // NEEDLE TIP - thin triangle that orbits around center
+    needle_tip = lv_line_create(lv_scr_act());
+    lv_obj_set_style_line_width(needle_tip, 8, 0);  // Thin line width
+    lv_obj_set_style_line_color(needle_tip, lv_color_hex(needle_color), 0);
+    lv_obj_set_style_line_rounded(needle_tip, 0, 0);  // Not rounded
+    
     common_label_setup();
-    lv_obj_align(mode_label, LV_ALIGN_BOTTOM_MID, 0, -80);
-    lv_obj_align(val_label_int, LV_ALIGN_CENTER, -15, -140); // move main text well above the bar
-    lv_obj_align(val_label_dec, LV_ALIGN_CENTER, 15, -140);
+    lv_obj_align(mode_label, LV_ALIGN_BOTTOM_MID, 0, -40);
+    lv_obj_align(val_label_int, LV_ALIGN_CENTER, 50, -10); // Move right 40 px, up 10 px
+    lv_obj_align(val_label_dec, LV_ALIGN_CENTER, 50, -10);  // Move right 40 px, up 10 px
     
     current_applied_text = 0; 
 }
 
 void update_ui(float val, float min, float max, float peak, uint32_t color_hex) {
-    float pct = (val - min) / (max - min);
-    if(pct < 0) pct=0; if(pct > 1) pct=1;
-    static int prev_bar_val = -1;
-    int new_bar_val = (int)(pct * 100);
-    if (new_bar_val != prev_bar_val) {
-        lv_bar_set_value(bar, new_bar_val, LV_ANIM_OFF);
-        prev_bar_val = new_bar_val;
-    }
-
+    // Ring indicator: only update color based on gauge value
     static uint32_t prev_color = 0;
     if (color_hex != prev_color) {
-        lv_obj_set_style_bg_color(bar, lv_color_hex(color_hex), LV_PART_INDICATOR);
+        lv_obj_set_style_border_color(bar, lv_color_hex(color_hex), 0);
         prev_color = color_hex;
     }
 
+    // Peak indicator (optional, currently not used)
     if (peak_hold_enabled) {
-      float p_pct = (peak - min) / (max - min);
-      if(p_pct < 0) p_pct=0; if(p_pct > 1) p_pct=1;
-      int bar_x = lv_obj_get_x(bar);
-      int bar_y = lv_obj_get_y(bar);
-      int bar_w = lv_obj_get_width(bar);
-      int px = bar_x + (int)(p_pct * bar_w) - (lv_obj_get_width(peak_dot)/2);
-      // Clamp peak stripe to stay within bar bounds
-      int peak_w = lv_obj_get_width(peak_dot);
-      if (px < bar_x) px = bar_x;
-      if (px + peak_w > bar_x + bar_w) px = bar_x + bar_w - peak_w;
-      int py = bar_y - 8; // center on bar
-      static int prev_px = -1, prev_py = -1;
-      if (px != prev_px || py != prev_py) {
-          lv_obj_set_pos(peak_dot, px, py);
-          prev_px = px; prev_py = py;
-      }
       lv_obj_clear_flag(peak_dot, LV_OBJ_FLAG_HIDDEN);
     } else {
       lv_obj_add_flag(peak_dot, LV_OBJ_FLAG_HIDDEN);
     }
+    
+    // Update needle tip position based on gauge value
+    float angle_start = 135.0f;  // Start angle in degrees (SSW - South-Southwest)
+    float angle_range = 270.0f;  // 315 degrees clockwise sweep
+    // Path: SSW (112.5°) → South (90°) → N (270°) → E (0°/360°) → SSE (67.5°)
+    // Midpoint: 112.5 + 157.5 = 270° (North - 12 o'clock)
+    
+    // Map value to angle
+    float normalized = (val - min) / (max - min);
+    normalized = (normalized < 0) ? 0 : (normalized > 1) ? 1 : normalized;  // Clamp to 0-1
+    float angle_deg = angle_start + normalized * angle_range;
+    
+    // Convert to radians
+    float angle_rad = angle_deg * M_PI / 180.0f;
+    
+    // Calculate needle line from 185 to 225px radius to inside of ring
+    int center_x = 240;
+    int center_y = 240;
+    int radius_start = 185;  // Starting radius
+    int radius_end = 225;    // Ending radius (tip)
+    
+    // Line points: start, tip
+    static lv_point_precise_t needle_points[2];
+    
+    // Start point at 225px radius
+    needle_points[0].x = center_x + (int)(radius_start * cosf(angle_rad));
+    needle_points[0].y = center_y + (int)(radius_start * sinf(angle_rad));
+    
+    // Tip point at 240px radius
+    needle_points[1].x = center_x + (int)(radius_end * cosf(angle_rad));
+    needle_points[1].y = center_y + (int)(radius_end * sinf(angle_rad));
+    
+    lv_line_set_points(needle_tip, needle_points, 2);
 }
 
 void update_gauge_master() {
@@ -500,7 +539,7 @@ void update_gauge_master() {
     if (fabsf(delta) < 0.05f) {
       displayed_val = target_val;
     } else {
-      const float smoothing = 0.06f; // lower = smoother/slower
+      const float smoothing = 0.24f; // lower = smoother/slower
       const float max_rate_per_sec = 40.0f; // units per second maximum change
       float step = delta * smoothing;
       float max_step = max_rate_per_sec * dt;
@@ -540,14 +579,19 @@ void update_gauge_master() {
       lv_label_set_text(val_label_dec, b2);
       strncpy(prev_b2, b2, sizeof(prev_b2));
     }
-    // Keep fixed alignment; only reposition when label widths change
+    // Dynamic spacing: right-justify integer label and place decimal to its right
     static int prev_int_w = 0; static int prev_dec_w = 0;
     int int_w = lv_obj_get_width(val_label_int);
     int dec_w = lv_obj_get_width(val_label_dec);
     if (int_w != prev_int_w || dec_w != prev_dec_w) {
       prev_int_w = int_w; prev_dec_w = dec_w;
-      lv_obj_align(val_label_int, LV_ALIGN_CENTER, -(int_w*0.75)-10, -70);
-      lv_obj_align(val_label_dec, LV_ALIGN_CENTER, (dec_w*0.75)+10, -70);
+      int spacing = 12;  // Gap between integer and decimal
+      // Anchor the integer's RIGHT edge at this x (relative to center)
+      int anchor_x = -(spacing / 2);
+      int int_center_x = anchor_x - (int_w / 2) + 50;  // +40 px right
+      int dec_center_x = anchor_x + spacing + (dec_w / 2) + 50;  // +40 px right
+      lv_obj_align(val_label_int, LV_ALIGN_CENTER, int_center_x, 5);  // Y: 10 (up 10 px from 20)
+      lv_obj_align(val_label_dec, LV_ALIGN_CENTER, dec_center_x, 5);   // Y: 10 (up 10 px from 20)
     }
 
     float min = RANGES[current_mode][0];
@@ -615,7 +659,7 @@ void setup() {
   color_background = preferences.getUInt("cbg", 0x000000);
   color_mode_label = preferences.getUInt("cml", 0x969696);
   color_link_icon = preferences.getUInt("cli", 0x00C851);
-  color_bar_bg = preferences.getUInt("cbb", 0x1E1E1E);
+  needle_color = preferences.getUInt("cn", 0xFF6600);
   color_peak = preferences.getUInt("cp", 0xFFFFFF);
   current_brightness = preferences.getInt("bright", 40);
   peak_hold_enabled = preferences.getBool("peak", true); // LOAD PEAK SETTING
@@ -688,4 +732,3 @@ void loop() {
   yield();
   vTaskDelay(pdMS_TO_TICKS(5));
 }
-

@@ -720,7 +720,7 @@ void setup() {
 
   // Initialize BLE BEFORE WiFi (BLE needs to claim memory first)
   uint8_t mac[6];
-  esp_read_mac(mac, ESP_MAC_WIFI_STA); // Get MAC without starting WiFi
+  WiFi.macAddress(mac); // Get MAC without starting WiFi (just reads from eFuse)
   char bleName[32];
   snprintf(bleName, sizeof(bleName), "Haltech-%02X%02X", mac[4], mac[5]);
 

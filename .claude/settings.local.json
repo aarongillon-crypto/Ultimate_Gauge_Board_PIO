@@ -1,7 +1,21 @@
 {
   "permissions": {
     "allow": [
-      "Bash(git checkout:*)"
+      "Bash(git checkout:*)",
+      "Bash(flutter analyze:*)",
+      "Bash(flutter pub get:*)",
+      "Bash(flutter clean:*)",
+      "Bash(flutter build:*)",
+      "Bash(findstr:*)",
+      "Bash(del /f \"c:\\\\Users\\\\blu_r\\\\OneDrive\\\\Documents\\\\GitHub\\\\haltech_gauge_app\\\\build\\\\flutter_assets\\\\shaders\\\\stretch_effect.frag\")",
+      "Bash(del /f \"c:\\\\Users\\\\blu_r\\\\OneDrive\\\\Documents\\\\GitHub\\\\haltech_gauge_app\\\\build\\\\flutter_assets\\\\shaders\\\\ink_sparkle.frag\")",
+      "Bash(git init:*)",
+      "Bash(git status:*)",
+      "Bash(gh auth:*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git pull:*)",
+      "Bash(git push:*)"
     ]
   }
 }

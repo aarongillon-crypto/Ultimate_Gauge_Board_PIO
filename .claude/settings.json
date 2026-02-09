@@ -1,0 +1,7 @@
+{
+  "permissions": {
+    "allow": [
+      "Read(//c/Users/blu_r/OneDrive/Documents/GitHub/haltech_gauge_app/lib/screens/**)"
+    ]
+  }
+}

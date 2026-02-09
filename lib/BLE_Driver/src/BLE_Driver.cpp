@@ -48,9 +48,9 @@ class ServerCallbacks: public NimBLEServerCallbacks {
 // Configuration Characteristic Callbacks
 class ModeSettingCallbacks: public NimBLECharacteristicCallbacks {
     void onWrite(NimBLECharacteristic* pCharacteristic, NimBLEConnInfo& connInfo) {
-        uint8_t* data = pCharacteristic->getData();
-        if (data != nullptr && pCharacteristic->getDataLength() >= 1) {
-            uint8_t newMode = data[0];
+        std::string value = pCharacteristic->getValue();
+        if (value.length() >= 1) {
+            uint8_t newMode = (uint8_t)value[0];
             Serial.printf("BLE Mode Change Request: %d\n", newMode);
             if (modeChangeCallback != nullptr) {
                 modeChangeCallback(newMode);
@@ -61,8 +61,9 @@ class ModeSettingCallbacks: public NimBLECharacteristicCallbacks {
 
 class ColorCallbacks: public NimBLECharacteristicCallbacks {
     void onWrite(NimBLECharacteristic* pCharacteristic, NimBLEConnInfo& connInfo) {
-        if (colorChangeCallback != nullptr && pCharacteristic->getDataLength() >= 16) {
-            uint8_t* data = pCharacteristic->getData();
+        std::string value = pCharacteristic->getValue();
+        if (colorChangeCallback != nullptr && value.length() >= 16) {
+            const uint8_t* data = (const uint8_t*)value.data();
             uint32_t textColor = (data[0] << 24) | (data[1] << 16) | (data[2] << 8) | data[3];
             uint32_t lowColor = (data[4] << 24) | (data[5] << 16) | (data[6] << 8) | data[7];
             uint32_t midColor = (data[8] << 24) | (data[9] << 16) | (data[10] << 8) | data[11];
@@ -75,9 +76,9 @@ class ColorCallbacks: public NimBLECharacteristicCallbacks {
 
 class BrightnessCallbacks: public NimBLECharacteristicCallbacks {
     void onWrite(NimBLECharacteristic* pCharacteristic, NimBLEConnInfo& connInfo) {
-        uint8_t* data = pCharacteristic->getData();
-        if (data != nullptr && pCharacteristic->getDataLength() >= 1) {
-            uint8_t brightness = data[0];
+        std::string value = pCharacteristic->getValue();
+        if (value.length() >= 1) {
+            uint8_t brightness = (uint8_t)value[0];
             Serial.printf("BLE Brightness Change Request: %d\n", brightness);
             if (brightnessChangeCallback != nullptr) {
                 brightnessChangeCallback(brightness);
@@ -88,9 +89,9 @@ class BrightnessCallbacks: public NimBLECharacteristicCallbacks {
 
 class PeakHoldCallbacks: public NimBLECharacteristicCallbacks {
     void onWrite(NimBLECharacteristic* pCharacteristic, NimBLEConnInfo& connInfo) {
-        uint8_t* data = pCharacteristic->getData();
-        if (data != nullptr && pCharacteristic->getDataLength() >= 1) {
-            bool enabled = (data[0] != 0);
+        std::string value = pCharacteristic->getValue();
+        if (value.length() >= 1) {
+            bool enabled = (value[0] != 0);
             Serial.printf("BLE Peak Hold Change Request: %d\n", enabled);
             if (peakHoldChangeCallback != nullptr) {
                 peakHoldChangeCallback(enabled);
@@ -99,12 +100,17 @@ class PeakHoldCallbacks: public NimBLECharacteristicCallbacks {
     }
 };
 
-void ble_init(const char* deviceName) {
+bool ble_init(const char* deviceName) {
     Serial.println("Initializing BLE...");
 
-    // Initialize NimBLE
-    NimBLEDevice::init(deviceName);
-    NimBLEDevice::setPower(ESP_PWR_LVL_P9); // Max power
+    // Initialize NimBLE with error handling
+    try {
+        NimBLEDevice::init(deviceName);
+        NimBLEDevice::setPower(ESP_PWR_LVL_P9); // Max power
+    } catch (...) {
+        Serial.println("BLE initialization failed - likely out of memory");
+        return false;
+    }
 
     // Create BLE Server
     pServer = NimBLEDevice::createServer();
@@ -182,6 +188,7 @@ void ble_init(const char* deviceName) {
     NimBLEDevice::startAdvertising();
 
     Serial.println("BLE Initialized and Advertising");
+    return true;
 }
 
 void ble_update_gauge_value(float value) {

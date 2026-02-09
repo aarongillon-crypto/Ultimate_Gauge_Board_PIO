@@ -718,20 +718,29 @@ void setup() {
   set_backlight(current_brightness);
   load_current_style();
 
-  setup_wifi();
-
-  // Initialize BLE
+  // Initialize BLE BEFORE WiFi (BLE needs to claim memory first)
   uint8_t mac[6];
-  WiFi.macAddress(mac);
+  esp_read_mac(mac, ESP_MAC_WIFI_STA); // Get MAC without starting WiFi
   char bleName[32];
   snprintf(bleName, sizeof(bleName), "Haltech-%02X%02X", mac[4], mac[5]);
-  ble_init(bleName);
 
-  // Register BLE callbacks
-  ble_register_mode_callback(onBLEModeChange);
-  ble_register_color_callback(onBLEColorChange);
-  ble_register_brightness_callback(onBLEBrightnessChange);
-  ble_register_peak_hold_callback(onBLEPeakHoldChange);
+  Serial.printf("Free heap before BLE init: %d bytes\n", ESP.getFreeHeap());
+  bool ble_success = ble_init(bleName);
+  Serial.printf("Free heap after BLE init: %d bytes\n", ESP.getFreeHeap());
+
+  if (ble_success) {
+    Serial.println("BLE initialized successfully");
+    // Register BLE callbacks
+    ble_register_mode_callback(onBLEModeChange);
+    ble_register_color_callback(onBLEColorChange);
+    ble_register_brightness_callback(onBLEBrightnessChange);
+    ble_register_peak_hold_callback(onBLEPeakHoldChange);
+  } else {
+    Serial.println("BLE initialization failed - continuing without BLE support");
+  }
+
+  // Initialize WiFi AFTER BLE
+  setup_wifi();
 
   canMsgQueue = xQueueCreate(CAN_QUEUE_LENGTH, CAN_QUEUE_ITEM_SIZE);
   xTaskCreatePinnedToCore(receive_can_task, "RxCAN", 4096, NULL, 2, NULL, 1);

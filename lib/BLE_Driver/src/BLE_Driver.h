@@ -28,7 +28,7 @@ typedef void (*BLEBrightnessChangeCallback)(uint8_t brightness);
 typedef void (*BLEPeakHoldChangeCallback)(bool enabled);
 
 // BLE Driver Functions
-void ble_init(const char* deviceName);
+bool ble_init(const char* deviceName); // Returns true on success, false on failure
 void ble_update_gauge_value(float value);
 void ble_update_gauge_mode(uint8_t mode);
 void ble_update_peak_value(float value);

@@ -346,7 +346,10 @@ void setup_wifi() {
   uint8_t mac[6]; WiFi.macAddress(mac);
   char ssid[32]; snprintf(ssid, sizeof(ssid), "Haltech-Gauge-%02X%02X", mac[4], mac[5]);
   WiFi.softAP(ssid, NULL, WIFI_CHANNEL);
-  
+
+  // Reduce WiFi power to minimize interference with BLE and display
+  esp_wifi_set_max_tx_power(44); // Reduce from default 78 (19.5dBm) to 44 (11dBm)
+
   if (esp_now_init() != ESP_OK) return;
   esp_now_register_recv_cb(OnDataRecv);
   

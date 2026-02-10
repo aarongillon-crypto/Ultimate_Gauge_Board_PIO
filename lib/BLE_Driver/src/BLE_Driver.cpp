@@ -30,14 +30,14 @@ static BLEColorChangeCallback colorChangeCallback = nullptr;
 static BLEBrightnessChangeCallback brightnessChangeCallback = nullptr;
 static BLEPeakHoldChangeCallback peakHoldChangeCallback = nullptr;
 
-// Server callbacks
+// Server callbacks (NimBLE 1.4.x API - uses ble_gap_conn_desc*, not NimBLEConnInfo&)
 class ServerCallbacks: public NimBLEServerCallbacks {
-    void onConnect(NimBLEServer* pServer, NimBLEConnInfo& connInfo) {
+    void onConnect(NimBLEServer* pServer) override {
         deviceConnected = true;
         Serial.println("BLE Client Connected");
     }
 
-    void onDisconnect(NimBLEServer* pServer, NimBLEConnInfo& connInfo, int reason) {
+    void onDisconnect(NimBLEServer* pServer) override {
         deviceConnected = false;
         Serial.println("BLE Client Disconnected");
         // Start advertising again
@@ -47,7 +47,7 @@ class ServerCallbacks: public NimBLEServerCallbacks {
 
 // Configuration Characteristic Callbacks
 class ModeSettingCallbacks: public NimBLECharacteristicCallbacks {
-    void onWrite(NimBLECharacteristic* pCharacteristic, NimBLEConnInfo& connInfo) {
+    void onWrite(NimBLECharacteristic* pCharacteristic) override {
         std::string value = pCharacteristic->getValue();
         if (value.length() >= 1) {
             uint8_t newMode = (uint8_t)value[0];
@@ -60,7 +60,7 @@ class ModeSettingCallbacks: public NimBLECharacteristicCallbacks {
 };
 
 class ColorCallbacks: public NimBLECharacteristicCallbacks {
-    void onWrite(NimBLECharacteristic* pCharacteristic, NimBLEConnInfo& connInfo) {
+    void onWrite(NimBLECharacteristic* pCharacteristic) override {
         std::string value = pCharacteristic->getValue();
         if (colorChangeCallback != nullptr && value.length() >= 16) {
             const uint8_t* data = (const uint8_t*)value.data();
@@ -75,7 +75,7 @@ class ColorCallbacks: public NimBLECharacteristicCallbacks {
 };
 
 class BrightnessCallbacks: public NimBLECharacteristicCallbacks {
-    void onWrite(NimBLECharacteristic* pCharacteristic, NimBLEConnInfo& connInfo) {
+    void onWrite(NimBLECharacteristic* pCharacteristic) override {
         std::string value = pCharacteristic->getValue();
         if (value.length() >= 1) {
             uint8_t brightness = (uint8_t)value[0];
@@ -88,7 +88,7 @@ class BrightnessCallbacks: public NimBLECharacteristicCallbacks {
 };
 
 class PeakHoldCallbacks: public NimBLECharacteristicCallbacks {
-    void onWrite(NimBLECharacteristic* pCharacteristic, NimBLEConnInfo& connInfo) {
+    void onWrite(NimBLECharacteristic* pCharacteristic) override {
         std::string value = pCharacteristic->getValue();
         if (value.length() >= 1) {
             bool enabled = (value[0] != 0);

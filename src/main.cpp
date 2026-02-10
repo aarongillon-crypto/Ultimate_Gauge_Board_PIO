@@ -683,6 +683,22 @@ void onBLEBrightnessChange(uint8_t brightness) {
   }
 }
 
+void onBLEStaticColorChange(uint32_t bg, uint32_t ml, uint32_t li, uint32_t nd, uint32_t pk) {
+  color_background = bg;
+  color_mode_label = ml;
+  color_link_icon = li;
+  needle_color = nd;
+  color_peak = pk;
+  preferences.begin("gauge", false);
+  preferences.putUInt("cbg", color_background);
+  preferences.putUInt("cml", color_mode_label);
+  preferences.putUInt("cli", color_link_icon);
+  preferences.putUInt("cn", needle_color);
+  preferences.putUInt("cp", color_peak);
+  preferences.end();
+  flag_theme_update = true;
+}
+
 void onBLEPeakHoldChange(bool enabled) {
   peak_hold_enabled = enabled;
   preferences.begin("gauge", false);
@@ -736,6 +752,7 @@ void setup() {
     // Register BLE callbacks
     ble_register_mode_callback(onBLEModeChange);
     ble_register_color_callback(onBLEColorChange);
+    ble_register_static_color_callback(onBLEStaticColorChange);
     ble_register_brightness_callback(onBLEBrightnessChange);
     ble_register_peak_hold_callback(onBLEPeakHoldChange);
   } else {

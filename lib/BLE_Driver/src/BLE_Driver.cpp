@@ -178,12 +178,13 @@ bool ble_init(const char* deviceName) {
 
     pConfigService->start();
 
-    // Start advertising
+    // Start advertising - only advertise ONE 128-bit UUID to stay within
+    // the 31-byte advertisement packet limit. Config service is discovered
+    // after connection via service discovery.
     NimBLEAdvertising* pAdvertising = NimBLEDevice::getAdvertising();
     pAdvertising->addServiceUUID(BLE_SERVICE_GAUGE_DATA_UUID);
-    pAdvertising->addServiceUUID(BLE_SERVICE_CONFIG_UUID);
     pAdvertising->setScanResponse(true);
-    pAdvertising->setMinPreferred(0x06);  // Functions that help with iPhone connections issue
+    pAdvertising->setMinPreferred(0x06);
     pAdvertising->setMaxPreferred(0x12);
     NimBLEDevice::startAdvertising();
 

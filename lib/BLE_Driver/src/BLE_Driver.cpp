@@ -19,6 +19,7 @@ static NimBLECharacteristic* pCharColorMid = nullptr;
 static NimBLECharacteristic* pCharColorHigh = nullptr;
 static NimBLECharacteristic* pCharBrightness = nullptr;
 static NimBLECharacteristic* pCharPeakHold = nullptr;
+static NimBLECharacteristic* pCharStaticColors = nullptr;
 
 // Connection tracking
 static bool deviceConnected = false;
@@ -27,6 +28,7 @@ static bool oldDeviceConnected = false;
 // Callback function pointers
 static BLEModeChangeCallback modeChangeCallback = nullptr;
 static BLEColorChangeCallback colorChangeCallback = nullptr;
+static BLEStaticColorChangeCallback staticColorChangeCallback = nullptr;
 static BLEBrightnessChangeCallback brightnessChangeCallback = nullptr;
 static BLEPeakHoldChangeCallback peakHoldChangeCallback = nullptr;
 
@@ -83,6 +85,22 @@ class BrightnessCallbacks: public NimBLECharacteristicCallbacks {
             if (brightnessChangeCallback != nullptr) {
                 brightnessChangeCallback(brightness);
             }
+        }
+    }
+};
+
+class StaticColorCallbacks: public NimBLECharacteristicCallbacks {
+    void onWrite(NimBLECharacteristic* pCharacteristic) override {
+        std::string value = pCharacteristic->getValue();
+        if (staticColorChangeCallback != nullptr && value.length() >= 20) {
+            const uint8_t* data = (const uint8_t*)value.data();
+            uint32_t background = (data[0] << 24) | (data[1] << 16) | (data[2] << 8) | data[3];
+            uint32_t modeLabel  = (data[4] << 24) | (data[5] << 16) | (data[6] << 8) | data[7];
+            uint32_t linkIcon   = (data[8] << 24) | (data[9] << 16) | (data[10] << 8) | data[11];
+            uint32_t needle     = (data[12] << 24) | (data[13] << 16) | (data[14] << 8) | data[15];
+            uint32_t peak       = (data[16] << 24) | (data[17] << 16) | (data[18] << 8) | data[19];
+            Serial.println("BLE Static Color Change Request");
+            staticColorChangeCallback(background, modeLabel, linkIcon, needle, peak);
         }
     }
 };
@@ -176,6 +194,13 @@ bool ble_init(const char* deviceName) {
     );
     pCharPeakHold->setCallbacks(new PeakHoldCallbacks());
 
+    // Static Colors (20 bytes packed: bg, modeLabel, linkIcon, needle, peak)
+    pCharStaticColors = pConfigService->createCharacteristic(
+        BLE_CHAR_STATIC_COLORS_UUID,
+        NIMBLE_PROPERTY::READ | NIMBLE_PROPERTY::WRITE
+    );
+    pCharStaticColors->setCallbacks(new StaticColorCallbacks());
+
     pConfigService->start();
 
     // Start advertising - only advertise ONE 128-bit UUID to stay within
@@ -240,6 +265,10 @@ void ble_register_mode_callback(BLEModeChangeCallback callback) {
 
 void ble_register_color_callback(BLEColorChangeCallback callback) {
     colorChangeCallback = callback;
+}
+
+void ble_register_static_color_callback(BLEStaticColorChangeCallback callback) {
+    staticColorChangeCallback = callback;
 }
 
 void ble_register_brightness_callback(BLEBrightnessChangeCallback callback) {

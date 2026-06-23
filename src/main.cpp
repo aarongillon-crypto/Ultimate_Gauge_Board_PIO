@@ -114,6 +114,8 @@ volatile bool flag_theme_update = false;
 volatile bool flag_bright_update = false;
 volatile bool flag_stats_update = false;
 volatile bool flag_page_update = false;
+volatile bool flag_mode_update = false;   // apply a live gauge-mode change (no restart)
+volatile bool snap_displayed = false;      // snap needle/value to target on next frame
 
 #define WIFI_CHANNEL 1
 typedef struct __attribute__((packed)) { 
@@ -194,8 +196,11 @@ void OnDataRecv(const esp_now_recv_info_t * info, const uint8_t *incomingData, i
     update_peer_list(mac, pkt->mode);
   }
   else if (pkt->type == 2) {
-    preferences.begin("gauge", false); preferences.putInt("mode", pkt->mode); preferences.end();
-    flag_reboot = true;
+    // Remote mode change — apply live (no reboot). LVGL work is deferred to
+    // loop() via flag_mode_update since this runs in the ESP-NOW callback context.
+    current_mode = (GaugeMode)constrain(pkt->mode, 0, 3);
+    preferences.begin("gauge", false); preferences.putInt("mode", (int)current_mode); preferences.end();
+    flag_mode_update = true;
   }
   else if (pkt->type == 3) { 
     text_color = pkt->c1; color_low = pkt->c2; color_mid = pkt->c3; color_high = pkt->c4;
@@ -358,18 +363,13 @@ void handleTheme() {
 }
 void handleSet() {
     if (server.hasArg("mode")) {
-        int m = server.arg("mode").toInt();
-        Serial.printf("[HTTP] handleSet: local mode -> %d\n", m);
+        int m = constrain(server.arg("mode").toInt(), 0, 3);
+        Serial.printf("[HTTP] handleSet: local mode -> %d (live)\n", m);
+        current_mode = (GaugeMode)m;
         preferences.begin("gauge", false); preferences.putInt("mode", m); preferences.end();
-        // Send response BEFORE restarting — otherwise browser gets a connection reset,
-        // retries the GET, and if the phone switches to the slave's AP during reboot
-        // the slave's web server receives and processes the same /set?mode=X request.
-        server.sendHeader("Location", "/");
-        server.send(303);
-        server.client().flush();
-        delay(300);
-        ESP.restart();
+        flag_mode_update = true;   // apply live — no restart
     }
+    server.sendHeader("Location", "/"); server.send(303);
 }
 void handleTest() {
     if (server.hasArg("t")) test_mode_enabled = server.arg("t").toInt();
@@ -1036,6 +1036,9 @@ void update_gauge_master() {
       case MODE_OIL: target_val = HaltechData.oil_press_psi; break;
     }
 
+    // On a live mode change, jump straight to the new metric instead of sweeping.
+    if (snap_displayed) { displayed_val = target_val; snap_displayed = false; }
+
     // Time-aware smoothing with a per-frame clamp to avoid large jumps
     static unsigned long last_update_ms = 0;
     unsigned long now_ms = millis();
@@ -1288,6 +1291,14 @@ void loop() {
   if (flag_page_update) {
       flag_page_update = false;
       apply_page();
+  }
+  if (flag_mode_update) {
+      flag_mode_update = false;
+      lv_label_set_text(mode_label, MODE_NAMES[current_mode]);
+      // Fresh state for the new metric: drop stale peaks and snap the needle so
+      // it doesn't sweep across the dial from the old mode's value.
+      peak_val = -999.0f; peak_low_val = 999.0f; peak_timer = millis();
+      snap_displayed = true;
   }
 
   // --- STATS LOGIC ---

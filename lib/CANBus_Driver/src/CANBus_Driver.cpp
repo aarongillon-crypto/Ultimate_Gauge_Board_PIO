@@ -6,7 +6,7 @@ void canbus_init(void) {
 
   // Configure TWAI (CAN)
     twai_general_config_t g_config = TWAI_GENERAL_CONFIG_DEFAULT(CAN_TX_GPIO, CAN_RX_GPIO, TWAI_MODE_NORMAL);
-    twai_timing_config_t t_config = TWAI_TIMING_CONFIG_500KBITS();
+    twai_timing_config_t t_config = TWAI_TIMING_CONFIG_1MBITS();
     twai_filter_config_t f_config = TWAI_FILTER_CONFIG_ACCEPT_ALL();  // Accept all IDs
  
     // Install and start TWAI driver
@@ -22,5 +22,22 @@ void canbus_init(void) {
     } else {
         Serial.println("Failed to start TWAI driver.");
         while (1);
+    }
+}
+
+void canbus_recover(void) {
+    twai_status_info_t status;
+    if (twai_get_status_info(&status) == ESP_OK) {
+        if (status.state == TWAI_STATE_BUS_OFF) {
+            Serial.println("TWAI bus-off detected, recovering...");
+            twai_initiate_recovery();
+            // Wait for recovery to complete (max 1s)
+            for (int i = 0; i < 100; i++) {
+                delay(10);
+                twai_get_status_info(&status);
+                if (status.state == TWAI_STATE_STOPPED) break;
+            }
+            twai_start();
+        }
     }
 }

@@ -21,6 +21,7 @@
 #define BLE_CHAR_BRIGHTNESS_UUID       "12340025-1234-1234-1234-123456789abc"
 #define BLE_CHAR_PEAK_HOLD_UUID        "12340026-1234-1234-1234-123456789abc"
 #define BLE_CHAR_STATIC_COLORS_UUID    "12340027-1234-1234-1234-123456789abc"
+#define BLE_CHAR_FONT_UUID             "12340028-1234-1234-1234-123456789abc"
 
 // BLE Callback function types
 typedef void (*BLEModeChangeCallback)(uint8_t newMode);
@@ -28,6 +29,7 @@ typedef void (*BLEColorChangeCallback)(uint32_t text, uint32_t low, uint32_t mid
 typedef void (*BLEStaticColorChangeCallback)(uint32_t background, uint32_t modeLabel, uint32_t linkIcon, uint32_t needle, uint32_t peak);
 typedef void (*BLEBrightnessChangeCallback)(uint8_t brightness);
 typedef void (*BLEPeakHoldChangeCallback)(bool enabled);
+typedef void (*BLEFontChangeCallback)(uint8_t fontIndex);
 
 // BLE Driver Functions
 bool ble_init(const char* deviceName); // Returns true on success, false on failure
@@ -43,3 +45,5 @@ void ble_register_color_callback(BLEColorChangeCallback callback);
 void ble_register_static_color_callback(BLEStaticColorChangeCallback callback);
 void ble_register_brightness_callback(BLEBrightnessChangeCallback callback);
 void ble_register_peak_hold_callback(BLEPeakHoldChangeCallback callback);
+void ble_register_font_callback(BLEFontChangeCallback callback);
+void ble_set_font_value(uint8_t fontIndex);

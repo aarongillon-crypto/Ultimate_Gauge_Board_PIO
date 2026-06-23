@@ -15,7 +15,24 @@
       "Bash(git add:*)",
       "Bash(git commit:*)",
       "Bash(git pull:*)",
-      "Bash(git push:*)"
+      "Bash(git push:*)",
+      "Bash(powershell -NoProfile -Command:*)",
+      "Bash(grep -E \"\\\\.c$|\\\\.h$\")",
+      "Bash(Remove-Item \"C:\\\\Users\\\\blu_r\\\\OneDrive\\\\Documents\\\\GitHub\\\\Ultimate_Gauge_Board_PIO\\\\sdkconfig.defaults\" -ErrorAction SilentlyContinue)",
+      "Bash(Remove-Item \"C:\\\\Users\\\\blu_r\\\\OneDrive\\\\Documents\\\\GitHub\\\\Ultimate_Gauge_Board_PIO\\\\src\\\\orbitron_120.c\" -ErrorAction SilentlyContinue)",
+      "Bash(Remove-Item \"C:\\\\Users\\\\blu_r\\\\OneDrive\\\\Documents\\\\GitHub\\\\Ultimate_Gauge_Board_PIO\\\\src\\\\orbitron_96.c\" -ErrorAction SilentlyContinue)",
+      "Bash(Write-Host \"Done\")",
+      "PowerShell(Get-ChildItem \"C:\\\\Users\\\\blu_r\\\\OneDrive\\\\Documents\\\\GitHub\\\\Ultimate_Gauge_Board_PIO\\\\.pio\" -Recurse -ErrorAction SilentlyContinue | Where-Object { $_.Length -gt 1MB } | Select-Object FullName, @{N='MB';E={[math]::Round\\($_.Length/1MB,1\\)}} | Sort-Object MB -Descending | Select-Object -First 5)",
+      "Bash(pio run *)",
+      "PowerShell(cd \"C:\\\\Users\\\\blu_r\\\\OneDrive\\\\Documents\\\\GitHub\\\\Ultimate_Gauge_Board_PIO\"; & \"$env:USERPROFILE\\\\.platformio\\\\penv\\\\Scripts\\\\pio.exe\" run 2>&1 | Select-Object -Last 30)",
+      "PowerShell(cd \"C:\\\\Users\\\\blu_r\\\\OneDrive\\\\Documents\\\\GitHub\\\\Ultimate_Gauge_Board_PIO\"; & \"$env:USERPROFILE\\\\.platformio\\\\penv\\\\Scripts\\\\pio.exe\" run 2>&1 | Select-Object -Last 15)",
+      "PowerShell(cd \"C:\\\\Users\\\\blu_r\\\\OneDrive\\\\Documents\\\\GitHub\\\\Ultimate_Gauge_Board_PIO\"; & \"$env:USERPROFILE\\\\.platformio\\\\penv\\\\Scripts\\\\pio.exe\" run 2>&1 | Select-Object -Last 12)",
+      "PowerShell(cd \"C:\\\\Users\\\\blu_r\\\\OneDrive\\\\Documents\\\\GitHub\\\\Ultimate_Gauge_Board_PIO\"; & \"$env:USERPROFILE\\\\.platformio\\\\penv\\\\Scripts\\\\pio.exe\" run 2>&1 | Select-Object -Last 10)",
+      "PowerShell(pio run *)",
+      "PowerShell($p = \"$env:USERPROFILE\\\\.platformio\\\\penv\\\\Scripts\\\\pio.exe\"; if \\(Test-Path $p\\) { Write-Output \"FOUND: $p\" } else { Write-Output \"not at default\"; Get-Command platformio -ErrorAction SilentlyContinue })",
+      "PowerShell(& \"$env:USERPROFILE\\\\.platformio\\\\penv\\\\Scripts\\\\pio.exe\" run -e esp32-s3-devkitc1-n8r8 2>&1 | Select-Object -Last 70)",
+      "PowerShell($f = \".pio\\\\build\\\\esp32-s3-devkitc1-n8r8\\\\firmware.bin\"; if \\(Test-Path $f\\) { $i = Get-Item $f; Write-Output \\(\"{0}  \\({1:N0} bytes, built {2}\\)\" -f $i.FullName, $i.Length, $i.LastWriteTime\\) })",
+      "PowerShell(& \"$env:USERPROFILE\\\\.platformio\\\\penv\\\\Scripts\\\\pio.exe\" run -e esp32-s3-devkitc1-n8r8 2>&1 | Select-Object -Last 14)"
     ]
   }
 }

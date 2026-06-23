@@ -37,9 +37,9 @@ void st7701_cs_dis(){
 
 void st7701_reset(){
   set_exio(EXIO_PIN1, Low);
-  vTaskDelay(pdMS_TO_TICKS(10));
+  vTaskDelay(pdMS_TO_TICKS(50));  // Hold reset longer to ensure panel regulators discharge
   set_exio(EXIO_PIN1, High);
-  vTaskDelay(pdMS_TO_TICKS(50));
+  vTaskDelay(pdMS_TO_TICKS(200)); // Wait for internal LDOs to stabilise before SPI init
 }
 
 void st7701_init() {
@@ -318,7 +318,8 @@ void st7701_init() {
 
   st7701_write_command(0x20); //
   vTaskDelay(pdMS_TO_TICKS(120));
-  st7701_write_command(0x29); 
+  st7701_write_command(0x29); // Display ON
+  vTaskDelay(pdMS_TO_TICKS(120)); // Wait for panel to fully enable before RGB DMA starts
   st7701_cs_dis();
 
   //  RGB
@@ -345,7 +346,7 @@ void st7701_init() {
        .data_width = ESP_PANEL_LCD_RGB_DATA_WIDTH,
        .bits_per_pixel = ESP_PANEL_LCD_RGB_PIXEL_BITS,
        .num_fbs = ESP_PANEL_LCD_RGB_FRAME_BUF_NUM,
-       .bounce_buffer_size_px = 10 * ESP_PANEL_LCD_HEIGHT, // IMPORTANT: Enable bounce buffer
+       .bounce_buffer_size_px = ESP_PANEL_LCD_RGB_BOUNCE_BUF_SIZE, // 480*10 px of DMA SRAM
        .psram_trans_align = 64,
        .hsync_gpio_num = ESP_PANEL_LCD_PIN_NUM_RGB_HSYNC,
        .vsync_gpio_num = ESP_PANEL_LCD_PIN_NUM_RGB_VSYNC,
@@ -382,6 +383,9 @@ void lcd_init() {
   st7701_reset();
   st7701_init();
   backlight_init();
+  // Keep backlight OFF — caller must call set_backlight() after first frame is rendered
+  // to prevent showing corrupted framebuffer contents during startup
+  ledcWrite(LCD_BACKLIGHT_PIN, 0);
 }
 
 void lcd_add_window(uint16_t Xstart, uint16_t Xend, uint16_t Ystart, uint16_t Yend, uint8_t *color) {

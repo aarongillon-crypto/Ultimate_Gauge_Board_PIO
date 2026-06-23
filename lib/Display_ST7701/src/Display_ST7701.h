@@ -30,15 +30,15 @@
    #define ESP_PANEL_LCD_COLOR_BITS                  (16)
    #define ESP_PANEL_LCD_RGB_PIXEL_BITS              (16)    // 24 | 16
    #define ESP_PANEL_LCD_RGB_DATA_WIDTH              (16)
-   #define ESP_PANEL_LCD_RGB_TIMING_FREQ_HZ          (16 * 1000 * 1000)
+   #define ESP_PANEL_LCD_RGB_TIMING_FREQ_HZ          (12 * 1000 * 1000)
    #define ESP_PANEL_LCD_RGB_TIMING_HPW              (8)
    #define ESP_PANEL_LCD_RGB_TIMING_HBP              (10)
-   #define ESP_PANEL_LCD_RGB_TIMING_HFP              (50)
-   #define ESP_PANEL_LCD_RGB_TIMING_VPW              (3)
-   #define ESP_PANEL_LCD_RGB_TIMING_VBP              (8)
-   #define ESP_PANEL_LCD_RGB_TIMING_VFP              (8)
+   #define ESP_PANEL_LCD_RGB_TIMING_HFP              (30)
+   #define ESP_PANEL_LCD_RGB_TIMING_VPW              (6)
+   #define ESP_PANEL_LCD_RGB_TIMING_VBP              (16)
+   #define ESP_PANEL_LCD_RGB_TIMING_VFP              (16)
    #define ESP_PANEL_LCD_RGB_FRAME_BUF_NUM           (2)     // 1/2/3
-   #define ESP_PANEL_LCD_RGB_BOUNCE_BUF_SIZE         (ESP_PANEL_LCD_WIDTH * 10)
+   #define ESP_PANEL_LCD_RGB_BOUNCE_BUF_SIZE         (ESP_PANEL_LCD_WIDTH * 20)
 
    // ... (Pin definitions remain the same) ...
    #define ESP_PANEL_LCD_PIN_NUM_RGB_HSYNC           (38)
@@ -70,6 +70,7 @@
 
    extern uint8_t LCD_Backlight;
    extern esp_lcd_panel_handle_t panel_handle;
+   void st7701_reset();
    void st7701_init();
 
    void lcd_init();

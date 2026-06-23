@@ -16,3 +16,5 @@
 
    void lvgl_flush_callback(lv_display_t *disp, const lv_area_t *area, uint8_t *color_p);
    void lvgl_init(void);
+
+   extern uint32_t lvgl_render_ms; // DMA+render time, excluding vsync wait

@@ -20,6 +20,7 @@ static NimBLECharacteristic* pCharColorHigh = nullptr;
 static NimBLECharacteristic* pCharBrightness = nullptr;
 static NimBLECharacteristic* pCharPeakHold = nullptr;
 static NimBLECharacteristic* pCharStaticColors = nullptr;
+static NimBLECharacteristic* pCharFont = nullptr;
 
 // Connection tracking
 static bool deviceConnected = false;
@@ -31,6 +32,7 @@ static BLEColorChangeCallback colorChangeCallback = nullptr;
 static BLEStaticColorChangeCallback staticColorChangeCallback = nullptr;
 static BLEBrightnessChangeCallback brightnessChangeCallback = nullptr;
 static BLEPeakHoldChangeCallback peakHoldChangeCallback = nullptr;
+static BLEFontChangeCallback fontChangeCallback = nullptr;
 
 // Server callbacks (NimBLE 1.4.x API - uses ble_gap_conn_desc*, not NimBLEConnInfo&)
 class ServerCallbacks: public NimBLEServerCallbacks {
@@ -105,6 +107,19 @@ class StaticColorCallbacks: public NimBLECharacteristicCallbacks {
     }
 };
 
+class FontCallbacks: public NimBLECharacteristicCallbacks {
+    void onWrite(NimBLECharacteristic* pCharacteristic) override {
+        std::string value = pCharacteristic->getValue();
+        if (value.length() >= 1) {
+            uint8_t fontIndex = (uint8_t)value[0];
+            Serial.printf("BLE Font Change Request: %d\n", fontIndex);
+            if (fontChangeCallback != nullptr) {
+                fontChangeCallback(fontIndex);
+            }
+        }
+    }
+};
+
 class PeakHoldCallbacks: public NimBLECharacteristicCallbacks {
     void onWrite(NimBLECharacteristic* pCharacteristic) override {
         std::string value = pCharacteristic->getValue();
@@ -124,7 +139,7 @@ bool ble_init(const char* deviceName) {
     // Initialize NimBLE with error handling
     try {
         NimBLEDevice::init(deviceName);
-        NimBLEDevice::setPower(ESP_PWR_LVL_P9); // Max power
+        NimBLEDevice::setPower(ESP_PWR_LVL_N12); // -12dBm minimum - USB supply can't handle higher with display active
     } catch (...) {
         Serial.println("BLE initialization failed - likely out of memory");
         return false;
@@ -209,8 +224,8 @@ bool ble_init(const char* deviceName) {
     NimBLEAdvertising* pAdvertising = NimBLEDevice::getAdvertising();
     pAdvertising->addServiceUUID(BLE_SERVICE_GAUGE_DATA_UUID);
     pAdvertising->setScanResponse(true);
-    pAdvertising->setMinPreferred(0x06);
-    pAdvertising->setMaxPreferred(0x12);
+    pAdvertising->setMinPreferred(0x40); // 40ms min - less aggressive than 3.75ms, reduces RF burst overlap with WiFi
+    pAdvertising->setMaxPreferred(0x80); // 80ms max
     NimBLEDevice::startAdvertising();
 
     Serial.println("BLE Initialized and Advertising");
@@ -277,4 +292,14 @@ void ble_register_brightness_callback(BLEBrightnessChangeCallback callback) {
 
 void ble_register_peak_hold_callback(BLEPeakHoldChangeCallback callback) {
     peakHoldChangeCallback = callback;
+}
+
+void ble_register_font_callback(BLEFontChangeCallback callback) {
+    fontChangeCallback = callback;
+}
+
+void ble_set_font_value(uint8_t fontIndex) {
+    if (pCharFont != nullptr) {
+        pCharFont->setValue(&fontIndex, 1);
+    }
 }

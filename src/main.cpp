@@ -282,68 +282,111 @@ String macToString(uint8_t *mac) {
 
 void handleRoot() {
   String html;
-  html.reserve(3500); // pre-allocate to avoid repeated heap reallocs under PSRAM pressure
-  html = "<html><head><meta name='viewport' content='width=device-width, initial-scale=1'><style>body{font-family:sans-serif;text-align:center;padding:10px;background:#222;color:#fff;} .card{background:#333;margin:10px;padding:15px;border-radius:10px;} button{font-size:16px;width:45%;padding:10px;margin:5px;border:none;border-radius:5px;cursor:pointer;} .btn-b{background:#0099ff;color:white;} .btn-a{background:#00cc66;color:white;} .btn-w{background:#ff9900;color:white;} .btn-o{background:#cc3300;color:white;} input[type=color]{width:50px;height:40px;border:none;vertical-align:middle;margin:5px;} label{display:inline-block;width:60px;text-align:right;} input[type=range]{width:60%;vertical-align:middle;}</style></head><body>";
+  html.reserve(6500); // pre-allocate to avoid repeated heap reallocs under PSRAM pressure
+  html = "<html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width, initial-scale=1'><style>"
+         "*{box-sizing:border-box}"
+         "body{font-family:system-ui,'Segoe UI',Roboto,sans-serif;background:#0a0b0d;color:#e9eaec;margin:0 auto;padding:16px;max-width:540px}"
+         "h1{font-size:21px;letter-spacing:3px;text-transform:uppercase;margin:0;font-weight:700;display:flex;align-items:center}"
+         "h1::before{content:'';width:5px;height:22px;background:#ff8a00;margin-right:11px;border-radius:2px;box-shadow:0 0 8px rgba(255,138,0,.6)}"
+         ".status{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}"
+         ".chip{background:#1c1f25;border:1px solid #2a2e36;border-radius:20px;padding:4px 12px;font-size:11px;letter-spacing:1px;color:#868d97;text-transform:uppercase}"
+         ".chip b{color:#ff8a00;font-weight:700}"
+         ".card{background:#14161a;border:1px solid #2a2e36;border-left:3px solid #ff8a00;border-radius:10px;padding:15px;margin:13px 0}"
+         ".lbl,.card h3{font-size:11px;letter-spacing:2.5px;text-transform:uppercase;color:#868d97;font-weight:600}"
+         ".card h3{margin:0 0 13px}.lbl{margin:16px 4px 6px;display:block}.card h4{font-size:13px;margin:0 0 6px}"
+         ".row{display:grid;grid-template-columns:1fr 1fr;gap:9px}"
+         "button{font-size:15px;padding:11px 10px;border:1px solid #2a2e36;border-radius:8px;background:#1c1f25;color:#e9eaec;cursor:pointer;transition:.13s;width:100%;font-family:inherit;letter-spacing:.5px}"
+         "button:hover{border-color:#ff8a00;background:#23262d}button:active{transform:translateY(1px)}"
+         ".on,.on:hover{background:rgba(30,215,96,.15);border-color:#1ed760;color:#1ed760;box-shadow:0 0 12px rgba(30,215,96,.22)}"
+         ".active,.active:hover{background:rgba(255,138,0,.16);border-color:#ff8a00;color:#ff8a00;box-shadow:0 0 12px rgba(255,138,0,.25)}"
+         ".primary,.primary:hover{background:#ff8a00;border-color:#ff8a00;color:#0a0b0d;font-weight:700}"
+         ".danger,.danger:hover{border-color:#ff3b30;color:#ff3b30}"
+         "label{color:#868d97;font-size:14px}.crow{display:flex;justify-content:space-between;align-items:center;margin:8px 0}"
+         "input[type=range]{-webkit-appearance:none;appearance:none;width:100%;height:6px;border-radius:3px;background:#2a2e36;outline:none;margin:4px 0 10px}"
+         "input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:20px;height:20px;border-radius:50%;background:#ff8a00;cursor:pointer;box-shadow:0 0 8px rgba(255,138,0,.7)}"
+         "input[type=range]::-moz-range-thumb{width:20px;height:20px;border:none;border-radius:50%;background:#ff8a00}"
+         "input[type=color]{width:46px;height:34px;border:1px solid #2a2e36;border-radius:6px;background:none;padding:2px;cursor:pointer}"
+         "input[type=text]{background:#1c1f25;color:#e9eaec;border:1px solid #2a2e36;border-radius:8px;padding:10px;font-size:15px;width:100%;margin-bottom:9px}"
+         "select{background:#1c1f25;color:#e9eaec;border:1px solid #2a2e36;border-radius:8px;padding:9px;font-size:14px}"
+         "small{color:#5f6670;font-size:12px}#brval{color:#ff8a00;font-weight:700;font-size:18px}"
+         "</style></head><body>";
   html += "<h1>" + device_name + "</h1>";
-  html += "<p>Peers Found: " + String(fleet_count) + "</p>";
-  html += "<div class='card'><h3>DEVICE NAME</h3><form action='/name' method='get'><input type='text' name='n' value='" + device_name + "' maxlength='20' style='font-size:16px;padding:8px;width:70%;border-radius:5px;border:none;'> <button style='width:auto;background:#555;color:white;'>Rename</button></form><small style='color:#aaa'>Used as WiFi AP name (Haltech-[name]) and BLE name. Restarts device.</small></div>";
+  html += "<div class='status'><span class='chip'><b id='chippeers'>" + String(fleet_count) + "</b> peers</span><span class='chip'>Mode <b id='chipmode'>" + String(MODE_NAMES[current_mode]) + "</b></span><span class='chip'>Page <b id='chippage'>" + String(current_page==PAGE_GAUGE?"GAUGE":"GLOWCRAFT") + "</b></span></div>";
+  html += "<div class='card'><h3>Device Name</h3><form action='/name' method='get'><input type='text' name='n' value='" + device_name + "' maxlength='20'><button class='danger'>Rename</button></form><small>WiFi AP name (Haltech-[name]). Restarts device.</small></div>";
   
-  html += "<div class='card'><h3>DYNAMIC ELEMENTS</h3><form action='/theme' method='get'><div><label>Text:</label><input type='color' name='ct' value='" + colorToHex(text_color) + "'></div><div><label>Low:</label><input type='color' name='cl' value='" + colorToHex(color_low) + "'></div><div><label>Mid:</label><input type='color' name='cm' value='" + colorToHex(color_mid) + "'></div><div><label>High:</label><input type='color' name='ch' value='" + colorToHex(color_high) + "'></div><button style='width:auto;margin-top:10px;background:#d32f2f;color:white;'>Apply to ALL</button></form></div>";
+  html += "<div class='card'><h3>Dynamic Elements</h3><form action='/theme' method='get' onsubmit='return subm(event,this)'><div class='crow'><label>Text</label><input type='color' name='ct' value='" + colorToHex(text_color) + "'></div><div class='crow'><label>Low</label><input type='color' name='cl' value='" + colorToHex(color_low) + "'></div><div class='crow'><label>Mid</label><input type='color' name='cm' value='" + colorToHex(color_mid) + "'></div><div class='crow'><label>High</label><input type='color' name='ch' value='" + colorToHex(color_high) + "'></div><button class='primary'>Apply to ALL</button></form></div>";
 
 
 
-  html += "<div class='card'><h3>STATIC ELEMENTS</h3><form action='/uicolors' method='get'><div><label>Background:</label><input type='color' name='cbg' value='" + colorToHex(color_background) + "'></div><div><label>Mode Label:</label><input type='color' name='cml' value='" + colorToHex(color_mode_label) + "'></div><div><label>Link Icon:</label><input type='color' name='cli' value='" + colorToHex(color_link_icon) + "'></div><div><label>Needle:</label><input type='color' name='cn' value='" + colorToHex(needle_color) + "'></div><div><label>Peak Stripe:</label><input type='color' name='cp' value='" + colorToHex(color_peak) + "'></div><button style='width:auto;margin-top:10px;background:#2196F3;color:white;'>Apply to ALL</button></form></div>";
+  html += "<div class='card'><h3>Static Elements</h3><form action='/uicolors' method='get' onsubmit='return subm(event,this)'><div class='crow'><label>Background</label><input type='color' name='cbg' value='" + colorToHex(color_background) + "'></div><div class='crow'><label>Mode Label</label><input type='color' name='cml' value='" + colorToHex(color_mode_label) + "'></div><div class='crow'><label>Link Icon</label><input type='color' name='cli' value='" + colorToHex(color_link_icon) + "'></div><div class='crow'><label>Needle</label><input type='color' name='cn' value='" + colorToHex(needle_color) + "'></div><div class='crow'><label>Peak Stripe</label><input type='color' name='cp' value='" + colorToHex(color_peak) + "'></div><button class='primary'>Apply to ALL</button></form></div>";
 
-  html += "<div class='card'><h3>GLOBAL CONTROLS</h3><form action='/bright' method='get'><label>Brightness: </label><input type='range' name='b' min='10' max='100' value='" + String(current_brightness) + "' onchange='this.form.submit()'></form>";
-  html += "<a href='/test?t=" + String(!test_mode_enabled) + "'><button class='btn'>Test Mode: " + String(test_mode_enabled?"ON":"OFF") + "</button></a>";
-  html += "<br><a href='/stats?s=" + String(!show_perf_stats) + "'><button class='btn'>Stats: " + String(show_perf_stats?"ON":"OFF") + "</button></a>";
-  html += "<br><a href='/debug?d=" + String(!debug_mode_enabled) + "'><button class='btn' style='background:" + String(debug_mode_enabled?"#e65100":"#555") + "'>Serial Debug: " + String(debug_mode_enabled?"ON":"OFF") + "</button></a>";
-  html += "<br><a href='/font?f=" + String(current_font == 0 ? 1 : 0) + "'><button class='btn' style='background:#4a148c'>Font: " + String(current_font == 0 ? "DSEG14" : "Fira Mono") + "</button></a>";
-  html += "<br><a href='/preview'><button class='btn' style='background:#1a237e'>Live Preview</button></a>";
-  html += "<br><a href='/ota'><button class='btn' style='background:#37474f'>OTA Firmware Update</button></a>";
-  html += "</div>";
+  html += "<div class='card'><h3>Global Controls</h3>";
+  html += "<div class='crow'><label>Brightness</label><span id='brval'>" + String(current_brightness) + "</span></div>";
+  html += "<input type='range' min='10' max='100' value='" + String(current_brightness) + "' oninput=\"document.getElementById('brval').textContent=this.value\" onchange=\"setBright(this.value,this)\">";
+  html += "<div class='row'>";
+  html += "<button id='test' class='" + String(test_mode_enabled?"on":"") + "' onclick=\"tgl('/test','test','Test: ')\">Test: " + String(test_mode_enabled?"ON":"OFF") + "</button>";
+  html += "<button id='stats' class='" + String(show_perf_stats?"on":"") + "' onclick=\"tgl('/stats','stats','Stats: ')\">Stats: " + String(show_perf_stats?"ON":"OFF") + "</button>";
+  html += "<button id='dbg' class='" + String(debug_mode_enabled?"on":"") + "' onclick=\"tgl('/debug','dbg','Debug: ')\">Debug: " + String(debug_mode_enabled?"ON":"OFF") + "</button>";
+  html += "<button id='font' onclick=\"tglFont(this)\">Font: " + String(current_font == 0 ? "DSEG14" : "Fira Mono") + "</button>";
+  html += "</div><div class='row'>";
+  html += "<button onclick=\"location='/preview'\">Live Preview</button>";
+  html += "<button onclick=\"location='/ota'\">OTA Update</button>";
+  html += "</div></div>";
 
-  html += "<div class='card'><h3>DISPLAY PAGE</h3>";
-  html += "<a href='/page?pg=0'><button class='btn' style='background:" + String(current_page==PAGE_GAUGE?"#00cc66":"#555") + "'>Gauge</button></a>";
-  html += "<a href='/page?pg=1'><button class='btn' style='background:" + String(current_page==PAGE_GLOWCRAFT?"#00cc66":"#555") + "'>GlowCraft LEDs</button></a>";
-  html += "</div>";
+  html += "<div class='card'><h3>Display Page</h3><div class='row'>";
+  html += "<button id='pg0' class='pg" + String(current_page==PAGE_GAUGE?" active":"") + "' onclick=\"setPage(0,this)\">Gauge</button>";
+  html += "<button id='pg1' class='pg" + String(current_page==PAGE_GLOWCRAFT?" active":"") + "' onclick=\"setPage(1,this)\">GlowCraft</button>";
+  html += "</div></div>";
 
-  html += "<div class='card'><h3>LOCAL GAUGE</h3>";
-  // PEAK TOGGLE
-  html += "<a href='/peak?p=" + String(!peak_hold_enabled) + "'><button class='btn'>Peak Hold: " + String(peak_hold_enabled?"ON":"OFF") + "</button></a><br>";
+  html += "<div class='card'><h3>Local Gauge</h3>";
+  html += "<button id='peak' class='" + String(peak_hold_enabled?"on":"") + "' onclick=\"tgl('/peak','peak','Peak Hold: ')\">Peak Hold: " + String(peak_hold_enabled?"ON":"OFF") + "</button>";
 
   // SECONDARY METRIC (shown when peak hold is off)
-  html += "<div style='margin-top:10px'>";
-  html += "<p style='margin:4px 0;color:#aaa;font-size:13px'>Secondary metric (when Peak Hold OFF):</p>";
-  html += "<form action='/secondary' method='get' style='display:flex;gap:8px;align-items:center;flex-wrap:wrap'>";
-  html += "<select name='sm' style='font-size:14px;padding:5px;border-radius:5px;flex:1'>";
+  html += "<span class='lbl'>Secondary metric (Peak Hold OFF)</span>";
+  html += "<form action='/secondary' method='get' onsubmit='return subm(event,this)' style='display:flex;gap:8px;align-items:center'>";
+  html += "<select name='sm' style='flex:1'>";
   for (int i = 0; i < SECONDARY_COUNT; i++) {
     html += "<option value='" + String(i) + "'";
     if (secondary_metric == i) html += " selected";
     html += ">" + String(SECONDARY_NAMES[i]) + "</option>";
   }
   html += "</select>";
-  html += "<button type='submit' style='background:#5c6bc0;color:white;border:none;padding:6px 14px;border-radius:5px;font-size:14px'>Set</button>";
-  html += "</form></div>";
-  
-  html += "<p>Mode: <strong>" + String(MODE_NAMES[current_mode]) + "</strong></p>";
-  html += "<a href='/set?mode=0'><button class='btn-b'>Boost</button></a>";
-  html += "<a href='/set?mode=1'><button class='btn-a'>AFR</button></a>";
-  html += "<a href='/set?mode=2'><button class='btn-w'>Water</button></a>";
-  html += "<a href='/set?mode=3'><button class='btn-o'>Oil</button></a>";
-  html += "</div>";
+  html += "<button type='submit' class='primary' style='width:auto;padding:9px 16px'>Set</button>";
+  html += "</form>";
+
+  html += "<span class='lbl'>Display Metric</span><div class='row'>";
+  html += "<button class='m" + String(current_mode==0?" active":"") + "' onclick=\"setMode(0,this)\">Boost</button>";
+  html += "<button class='m" + String(current_mode==1?" active":"") + "' onclick=\"setMode(1,this)\">AFR</button>";
+  html += "<button class='m" + String(current_mode==2?" active":"") + "' onclick=\"setMode(2,this)\">Water</button>";
+  html += "<button class='m" + String(current_mode==3?" active":"") + "' onclick=\"setMode(3,this)\">Oil</button>";
+  html += "</div></div>";
   
   if (fleet_count > 0) {
-    html += "<h3>REMOTE GAUGES</h3>";
+    html += "<span class='lbl'>Remote Gauges</span>";
     for(int i=0; i<fleet_count; i++) {
         if (millis() - fleet[i].last_seen < 10000) {
             String macStr = "";
             for(int j=0; j<6; j++) { if(j>0) macStr += ":"; char buf[3]; sprintf(buf, "%02X", fleet[i].mac[j]); macStr += buf; }
             String macClean = macStr; macClean.replace(":", ""); 
-            html += "<div class='card'><h4>Gauge " + macClean.substring(9) + "</h4><p>" + String(MODE_NAMES[fleet[i].mode]) + "</p><a href='/rem?mac=" + macClean + "&mode=0'><button class='btn-b'>Boost</button></a><a href='/rem?mac=" + macClean + "&mode=1'><button class='btn-a'>AFR</button></a><a href='/rem?mac=" + macClean + "&mode=2'><button class='btn-w'>Water</button></a><a href='/rem?mac=" + macClean + "&mode=3'><button class='btn-o'>Oil</button></a></div>";
+            html += "<div class='card'><h4>Gauge " + macClean.substring(9) + "</h4><div class='status'><span class='chip'>Mode <b>" + String(MODE_NAMES[fleet[i].mode]) + "</b></span></div><div class='row'><button onclick=\"rem('/rem?mac=" + macClean + "&mode=0',this)\">Boost</button><button onclick=\"rem('/rem?mac=" + macClean + "&mode=1',this)\">AFR</button><button onclick=\"rem('/rem?mac=" + macClean + "&mode=2',this)\">Water</button><button onclick=\"rem('/rem?mac=" + macClean + "&mode=3',this)\">Oil</button></div></div>";
         }
     }
   }
+  // Background-fetch helpers. Each control updates from the server's reported new
+  // state and flashes green on confirmed success / red if the request failed.
+  html += "<script>"
+          "function flash(b,ok){if(!b)return;b.style.boxShadow='0 0 16px '+(ok?'#1ed760':'#ff3b30');setTimeout(function(){b.style.boxShadow='';},450);}"
+          "function gt(u){return fetch(u).then(function(r){if(!r.ok)throw 0;return r.text();});}"
+          "function tgl(u,id,pre){var b=document.getElementById(id);gt(u).then(function(s){var on=s.trim()=='1';b.textContent=pre+(on?'ON':'OFF');b.classList.toggle('on',on);flash(b,1);}).catch(function(){flash(b,0);});}"
+          "var MN=['BOOST','AFR','WATER','OIL P'];"
+          "function setMode(m,b){gt('/set?mode='+m).then(function(s){var i=parseInt(s),c=document.getElementById('chipmode');if(c)c.textContent=MN[i];document.querySelectorAll('.m').forEach(function(x){x.classList.remove('active')});b.classList.add('active');flash(b,1);}).catch(function(){flash(b,0);});}"
+          "function tglFont(b){gt('/font').then(function(s){b.textContent='Font: '+(parseInt(s)==0?'DSEG14':'Fira Mono');flash(b,1);}).catch(function(){flash(b,0);});}"
+          "function setPage(p,b){gt('/page?pg='+p).then(function(s){var pg=parseInt(s),c=document.getElementById('chippage');if(c)c.textContent=pg==0?'GAUGE':'GLOWCRAFT';document.querySelectorAll('.pg').forEach(function(x){x.classList.remove('active')});b.classList.add('active');flash(b,1);}).catch(function(){flash(b,0);});}"
+          "function post(u,b){return gt(u).then(function(s){flash(b,true);return s;}).catch(function(){flash(b,false);});}"
+          "function subm(ev,f){ev.preventDefault();post(f.getAttribute('action')+'?'+new URLSearchParams(new FormData(f)).toString(),f.querySelector('button'));return false;}"
+          "function setBright(v,b){post('/bright?b='+v,b);}"
+          "function rem(u,b){post(u,b);}"
+          "</script>";
   html += "</body></html>";
   server.send(200, "text/html", html);
 }
@@ -357,9 +400,9 @@ void handleTheme() {
         preferences.begin("gauge", false); preferences.putUInt("ct", text_color); preferences.putUInt("cl", color_low); preferences.putUInt("cm", color_mid); preferences.putUInt("ch", color_high); preferences.end();
         EspNowPacket pkt = {}; pkt.type = 3; pkt.c1=text_color; pkt.c2=color_low; pkt.c3=color_mid; pkt.c4=color_high;
         broadcast_packet(&pkt);
-        flag_theme_update = true; 
-        server.sendHeader("Location", "/"); server.send(303);
+        flag_theme_update = true;
     }
+    server.send(200, "text/plain", "OK");
 }
 void handleSet() {
     if (server.hasArg("mode")) {
@@ -369,44 +412,43 @@ void handleSet() {
         preferences.begin("gauge", false); preferences.putInt("mode", m); preferences.end();
         flag_mode_update = true;   // apply live — no restart
     }
-    server.sendHeader("Location", "/"); server.send(303);
+    // Reply with the applied mode index — the button confirms from this response.
+    server.send(200, "text/plain", String((int)current_mode));
 }
+// Toggle handlers flip server-side and return the new state ("1"/"0") so the web
+// UI can confirm the change actually took, rather than guessing optimistically.
 void handleTest() {
-    if (server.hasArg("t")) test_mode_enabled = server.arg("t").toInt();
+    test_mode_enabled = !test_mode_enabled;
     EspNowPacket pkt = {}; pkt.type = 4; pkt.value = test_mode_enabled?1:0; broadcast_packet(&pkt);
-    server.sendHeader("Location", "/"); server.send(303);
+    server.send(200, "text/plain", test_mode_enabled ? "1" : "0");
 }
 void handleStats() {
-    if (server.hasArg("s")) show_perf_stats = server.arg("s").toInt();
+    show_perf_stats = !show_perf_stats;
     EspNowPacket pkt = {}; pkt.type = 6; pkt.value = show_perf_stats?1:0; broadcast_packet(&pkt);
     flag_stats_update = true;
-    server.sendHeader("Location", "/"); server.send(303);
+    server.send(200, "text/plain", show_perf_stats ? "1" : "0");
 }
 void handleDebug() {
-    if (server.hasArg("d")) {
-        debug_mode_enabled = server.arg("d").toInt();
-        preferences.begin("gauge", false);
-        preferences.putBool("dbg", debug_mode_enabled);
-        preferences.end();
-    }
-    server.sendHeader("Location", "/"); server.send(303);
+    debug_mode_enabled = !debug_mode_enabled;
+    preferences.begin("gauge", false);
+    preferences.putBool("dbg", debug_mode_enabled);
+    preferences.end();
+    server.send(200, "text/plain", debug_mode_enabled ? "1" : "0");
 }
 void handleBright() {
     if (server.hasArg("b")) {
-        int b = server.arg("b").toInt();
+        int b = constrain(server.arg("b").toInt(), 10, 100);
         current_brightness = b; set_backlight(b);
         preferences.begin("gauge", false); preferences.putInt("bright", b); preferences.end();
         EspNowPacket pkt = {}; pkt.type = 5; pkt.value = b; broadcast_packet(&pkt);
-        server.sendHeader("Location", "/"); server.send(303);
     }
+    server.send(200, "text/plain", String(current_brightness));
 }
 void handlePeak() {
-    if (server.hasArg("p")) {
-        peak_hold_enabled = server.arg("p").toInt();
-        if (peak_hold_enabled) { peak_val = -999.0f; peak_low_val = 999.0f; }
-        preferences.begin("gauge", false); preferences.putBool("peak", peak_hold_enabled); preferences.end();
-        server.sendHeader("Location", "/"); server.send(303);
-    }
+    peak_hold_enabled = !peak_hold_enabled;
+    if (peak_hold_enabled) { peak_val = -999.0f; peak_low_val = 999.0f; }
+    preferences.begin("gauge", false); preferences.putBool("peak", peak_hold_enabled); preferences.end();
+    server.send(200, "text/plain", peak_hold_enabled ? "1" : "0");
 }
 void handleSecondary() {
     if (server.hasArg("sm"))
@@ -414,7 +456,7 @@ void handleSecondary() {
     preferences.begin("gauge", false);
     preferences.putUInt("sm", secondary_metric);
     preferences.end();
-    server.sendHeader("Location", "/"); server.send(303);
+    server.send(200, "text/plain", String((int)secondary_metric));
 }
 void handlePage() {
     if (server.hasArg("pg")) {
@@ -425,20 +467,15 @@ void handlePage() {
         preferences.end();
         flag_page_update = true;
     }
-    server.sendHeader("Location", "/"); server.send(303);
+    server.send(200, "text/plain", String((int)current_page));
 }
 void handleFont() {
-    if (server.hasArg("f")) {
-        uint8_t f = (uint8_t)server.arg("f").toInt();
-        if (f <= 1) {
-            current_font = f;
-            preferences.begin("gauge", false);
-            preferences.putUInt("font", current_font);
-            preferences.end();
-            flag_theme_update = true;
-        }
-    }
-    server.sendHeader("Location", "/"); server.send(303);
+    current_font = (current_font == 0) ? 1 : 0;   // two fonts: DSEG14 (0) / Fira Mono (1)
+    preferences.begin("gauge", false);
+    preferences.putUInt("font", current_font);
+    preferences.end();
+    flag_theme_update = true;
+    server.send(200, "text/plain", String((int)current_font));
 }
 // Capture the live RGB framebuffer and serve it as a BMP image.
 // The RGB panel keeps 2 PSRAM framebuffers; we grab whichever is current.
@@ -597,7 +634,7 @@ void handleRemote() {
         uint8_t targetMac[6];
         for (int i = 0; i < 6; i++) { String byteStr = macStr.substring(i*2, i*2+2); targetMac[i] = (uint8_t) strtol(byteStr.c_str(), NULL, 16); }
         send_remote_command(targetMac, m);
-        server.sendHeader("Location", "/"); server.send(303);
+        server.send(200, "text/plain", "OK");
     } else { server.send(400, "text/plain", "Bad Request"); }
 }
 
@@ -625,8 +662,8 @@ void handleUIColors() {
         pkt.value = (int)color_peak;
         broadcast_packet(&pkt);
         flag_theme_update = true;
-        server.sendHeader("Location", "/"); server.send(303);
     }
+    server.send(200, "text/plain", "OK");
 }
 
 void setup_wifi() {

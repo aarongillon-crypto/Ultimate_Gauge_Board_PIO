@@ -112,11 +112,16 @@ Four panels configured on the GlowCraft:
 | Panel | Dimensions | Pixel Count | Orientation |
 |---|---|---|---|
 | Front | 30×1 | 30 | Horizontal strip |
+| Front Badge | — | 4 | Lit Mitsubishi diamond in grille |
+| Left Headlight | — | 2 | Front-left accent |
+| Right Headlight | — | 2 | Front-right accent |
 | Left | 1×50 | 50 | Vertical strip |
-| Rear | 30×1 | 30 | Horizontal strip |
 | Right | 1×50 | 50 | Vertical strip |
+| Rear | 30×1 | 30 | Horizontal strip |
+| Front Plate | TBD | TBD | Planned — not yet installed |
+| Rear Plate | TBD | TBD | Possible future addition |
 
-**Total: 160 pixels**
+**Total: 168 pixels installed** (front/rear number-plate strips TBD)
 
 ---
 
@@ -171,50 +176,49 @@ Rotary Trim 3 (`0x3E4` byte 6) returns values `0`, `1`, `2`, `3` corresponding t
 
 ## 6. GlowCraft Status Broadcast — Gauge Page Data Source
 
-### 6.1 What the GlowCraft can broadcast
+### 6.1 Approach: per-strip representative colour
 
-Per firmware documentation, GlowCraft can broadcast a CAN status message describing its current state:
+The gauge consumes **one CAN frame per LED strip**, each carrying a single representative RGB colour plus brightness and state for that strip. Full per-pixel data (160+ pixels) is not viable over CAN, and the gauge page only needs a static representation of each strip, so every strip is summarised to one colour.
 
-- Which **show** is currently active
-- Which **performance** is currently running
-- The controller's current **operational state**
+This protocol is **defined by the gauge firmware** (`lib/GlowCraft_Driver/`); the GlowCraft is then configured to broadcast matching frames. The decoder is isolated in that module, so the on-wire format can change without touching the display layer (`update_glowcraft_page()`).
 
-This is enabled in Settings → CAN Bus → Status Message, with a configurable message ID. Individual shows can also broadcast their own ID when active (per-show "CAN Status Message" setting in the show editor).
+> **Status:** This is the gauge-side definition and is **provisional** until confirmed against what the GlowCraft's configurable CAN status message (Settings → CAN Bus → Status Message) can actually be set to emit. Reconcile with the GlowCraft's real capability, then update only the decoder in `GlowCraft_Driver`. We are consuming **strip status**, not the GlowCraft's show/performance/event broadcast.
 
-### 6.2 Frame structure — ⚠️ TO BE DEFINED
+### 6.2 Frame format (defined)
 
-The actual frame layout for the GlowCraft's status broadcast has not yet been documented by Current Labs in the available firmware docs. The following is a **placeholder structure** for the gauge page to be built against — to be updated once the actual frame format is confirmed (by reading live traffic on the bus or obtaining Current Labs documentation).
+- **Base ID:** `0x500`
+- **One CAN ID per strip:** `can_id = 0x500 + strip_index` (see 6.3)
+- **DLC:** 8 bytes
+- **Encoding:** big-endian (Motorola), to match the rest of the bus
 
-**Suggested placeholder Message ID:** `0x500` *(to be confirmed — must not clash with Haltech broadcast IDs)*
+| Byte | Field | Range / Values |
+|---|---|---|
+| 0 | Red | 0–255 |
+| 1 | Green | 0–255 |
+| 2 | Blue | 0–255 |
+| 3 | Brightness | 0–255 — master scale applied to RGB |
+| 4 | State | `0` = off/idle, `1` = solid, `2` = animating |
+| 5–7 | Reserved | 0 |
 
-```
-Byte 0:     Controller State enum
-              0x00 = Idle / no show active
-              0x01 = Show active
-              0x02 = Performance active
-              0xFF = Unknown / offline
+The gauge applies brightness per channel as `out = channel * brightness / 255`, then renders the strip in that colour. A strip with state `2` (animating) is shown in the representative colour of the current frame — the gauge does not attempt to reproduce the animation.
 
-Byte 1:     Active Show ID (0x00 if none)
-Byte 2:     Active Performance ID (0x00 if none)
-Bytes 3–7:  Reserved / TBD
-```
+**Offline handling:** if no frame for a strip is received within **2000 ms** (`GLOWCRAFT_OFFLINE_TIMEOUT_MS`), that strip is rendered dim/grey on the page.
 
-> Until the actual GlowCraft frame structure is confirmed, the gauge page should be architected so the CAN frame parser is isolated in its own module/function — easy to swap the decode logic once the real layout is known without touching the display layer.
+### 6.3 Strip ID assignments
 
-### 6.3 Per-show status IDs (planned)
+| Strip | CAN ID | Pixels | Notes |
+|---|---|---|---|
+| Front | `0x500` | 30 | Horizontal front bar |
+| Front Badge | `0x501` | 4 | Lit Mitsubishi diamond in grille |
+| Left Headlight | `0x502` | 2 | |
+| Right Headlight | `0x503` | 2 | |
+| Left | `0x504` | 50 | Vertical flank |
+| Right | `0x505` | 50 | Vertical flank |
+| Rear | `0x506` | 30 | Horizontal rear bar |
+| Front Plate | `0x507` | TBD | Planned — not installed; rendered as outline placeholder |
+| *(Rear Plate)* | `0x508` | TBD | Possible future — append here to keep IDs stable |
 
-Each show can be configured to broadcast its own ID when active. Suggested assignments (to be finalised):
-
-| Show | Suggested Broadcast ID |
-|---|---|
-| BOV Flash | `0x501` |
-| G-Force Reactive | `0x502` |
-| Brake Show | `0x503` |
-| Handbrake / Showmode | `0x504` |
-| Rotary Trim Mode 0 | `0x505` |
-| Rotary Trim Mode 1 | `0x506` |
-| Rotary Trim Mode 2 | `0x507` |
-| Rotary Trim Mode 3 | `0x508` |
+IDs are contiguous so the decoder is a simple base-offset lookup (`0x500 + index`). New strips **append at the end** so existing IDs never shift. The `0x500` block is clear of the Haltech broadcast ranges (`0x360`–`0x3EF`, `0x469`–`0x6FF`, `0x700`–`0x701`) — but re-confirm before finalising on the GlowCraft.
 
 ---
 
@@ -228,8 +232,7 @@ A new page on the Ultimate Gauge Board (IC-7 replacement project, ESP32-P4 / M5S
 
 | Data Point | Source | CAN ID | Update Rate |
 |---|---|---|---|
-| Active show name / ID | GlowCraft status broadcast | `0x500` (TBD) | On change |
-| Per-show active flag | Per-show broadcast IDs | `0x501`–`0x508` (TBD) | On change |
+| Per-strip colour / brightness / state | GlowCraft strip-status frames (§6) | `0x500`–`0x507` | On change |
 | Engine RPM | Haltech | `0x360` | 50 Hz |
 | Manifold Pressure | Haltech | `0x360` | 50 Hz |
 | Lateral G | Haltech | `0x36B` | 20 Hz |
@@ -238,6 +241,8 @@ A new page on the Ultimate Gauge Board (IC-7 replacement project, ESP32-P4 / M5S
 | Hand Brake State | Haltech | `0x3E4` | 5 Hz |
 | BOV / Transient Throttle | Haltech | `0x3E4` | 5 Hz |
 | Rotary Trim 3 | Haltech | `0x3E4` | 5 Hz |
+
+> **Note:** The Haltech rows above are decoded by the **GlowCraft** to drive its shows — the gauge firmware does **not** decode them. They are listed for reference only. The gauge page is driven solely by the GlowCraft strip-status frames (`0x500`–`0x507`). The one exception is a possible future feature: page-switching from Rotary Trim 3 (`0x3E4` byte 6), which would require the gauge to decode that frame at that point, or the GlowCraft to relay the rotary position in a strip-status frame.
 
 ### 7.3 Panel visualisation — layout intent
 
@@ -277,8 +282,8 @@ Each strip should:
 ## 8. Open Items / To-Do Before Building
 
 - [ ] Resolve `CAN_3` event slot conflict between BOV Flash gate and Brake Pressed trigger
-- [ ] Confirm actual GlowCraft CAN status broadcast frame structure (bus sniff or Current Labs documentation)
-- [ ] Confirm GlowCraft status message ID doesn't conflict with any Haltech broadcast IDs (Haltech uses `0x360`–`0x3EF`, `0x469`–`0x6FF`, `0x700`–`0x701`)
+- [ ] Confirm the GlowCraft can be configured to broadcast the strip-status frame format defined in §6 (one ID per strip from `0x500`; RGB + brightness + state). Reconcile §6 against its actual capability and update the `GlowCraft_Driver` decoder only if the wire format differs
+- [ ] Confirm the `0x500`–`0x508` strip-status ID block doesn't clash with any Haltech broadcast IDs on the bus (Haltech uses `0x360`–`0x3EF`, `0x469`–`0x6FF`, `0x700`–`0x701`)
 - [ ] Finalise Rotary Trim 3 show names and CAN event slot assignments (`CAN_5`–`CAN_8`)
 - [ ] Define G-Force show animator types and binding input/output ranges after in-car tuning
 - [ ] Confirm Brake Pedal Switch and Handbrake start bit positions in GlowCraft (live verify by pressing pedal and watching decoded value — big-endian bit numbering has two valid conventions, see reference doc §4.1)

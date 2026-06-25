@@ -77,10 +77,51 @@ uint32_t color_mode_label = 0x969696; // Mode label (gray)
 uint32_t color_link_icon = 0x00C851; // Connectivity icon (green)
 uint32_t needle_color = 0xFF6600;     // Needle color (orange)
 uint32_t color_peak = 0xFFFFFF;      // Peak stripe (white)
-uint32_t color_background = 0x000000; // Screen background (black)
+uint32_t color_background = 0x000000; // Screen background (black) — gradient stop 1
+// Background gradient (stop 1 = color_background). 0=solid keeps the flat fill.
+uint32_t color_background2 = 0x000000; // gradient stop 2
+uint32_t color_background3 = 0x000000; // gradient stop 3 (used when bg_grad_stops==3)
+uint8_t  bg_grad_type = 0;             // 0=solid 1=lin-V 2=lin-H 3=lin-angle 4=radial 5=conical
+uint8_t  bg_grad_stops = 2;            // 2 or 3
+uint16_t bg_grad_angle = 0;            // degrees: lin-angle direction / conical start
 uint32_t current_applied_text = 0;
 int current_brightness = 40;
 uint8_t current_font = 0;
+
+// --- TRIMPOT-DRIVEN THEME SLOTS ---
+// Rotary Trim 3 (Haltech 0x3E4 byte 6, values 0-3) can select one of four full
+// colour palettes live. Each slot holds the same 9 colours the two web theme
+// forms manage, so "edit the active slot" works through the existing pickers.
+struct GaugeTheme {
+  uint32_t text, low, mid, high;                              // Dynamic Elements
+  uint32_t background, mode_label, link_icon, needle, peak;   // Static Elements
+  uint32_t bg_grad2, bg_grad3;                                // Background gradient stops 2 & 3
+  uint8_t  bg_grad_type;                                      // 0=solid 1=linV 2=linH 3=linAngle 4=radial 5=conical
+  uint8_t  bg_grad_stops;                                     // 2 or 3
+  uint16_t bg_grad_angle;                                     // degrees (linAngle dir / conical start)
+};
+#define THEME_SLOTS 4
+GaugeTheme themes[THEME_SLOTS];
+uint8_t active_theme = 0;             // live slot (rotary-driven when sync is on)
+bool trimpot_theme_sync = false;      // NVS "tpsync" — gate the rotary->theme link
+volatile int last_trimpot3 = -1;      // last decoded rotary position (-1 = unseen)
+
+// Distinct factory palettes for slots 1-3 (slot 0 inherits the existing theme).
+static const GaugeTheme THEME_DEFAULTS[THEME_SLOTS] = {
+  // slot 0 — placeholder; overwritten by the live/legacy theme at load time (solid bg)
+  {0xFFD700,0x2196F3,0x4CAF50,0xF44336, 0x000000,0x969696,0x00C851,0xFF6600,0xFFFFFF, 0x000000,0x000000, 0,2,0},
+  // slot 1 — "Street" cool blue: vertical fade to black
+  {0xFFFFFF,0x2196F3,0x4CAF50,0xF44336, 0x001830,0x6699BB,0x00C851,0x33AAFF,0xFFFFFF, 0x000000,0x000000, 1,2,0},
+  // slot 2 — "Sport" amber: radial glow from centre
+  {0xFFD700,0x00C8FF,0xFFC107,0xFF3B30, 0x1A1000,0xAA8844,0xFFAA00,0xFF8A00,0xFFFFFF, 0x000000,0x000000, 4,2,0},
+  // slot 3 — "Race" red: 3-stop linear at 45°
+  {0xFFFFFF,0x00E676,0xFFEB3B,0xFF1744, 0x200000,0xBB5555,0xFF3B30,0xFF1744,0xFFFFFF, 0x080000,0x000000, 3,3,45},
+};
+void theme_to_globals(uint8_t i);
+void globals_to_theme(uint8_t i);
+void persist_theme(uint8_t i);
+void load_all_themes();
+
 // Forward declarations
 
 float displayed_val = 0.0;
@@ -208,9 +249,10 @@ void OnDataRecv(const esp_now_recv_info_t * info, const uint8_t *incomingData, i
     preferences.putUInt("ct", text_color); preferences.putUInt("cl", color_low);
     preferences.putUInt("cm", color_mid); preferences.putUInt("ch", color_high);
     preferences.end();
-    flag_theme_update = true; 
+    flag_theme_update = true;
+    globals_to_theme(active_theme); persist_theme(active_theme);
   }
-  else if (pkt->type == 4) { 
+  else if (pkt->type == 4) {
     test_mode_enabled = (pkt->value == 1);
   }
   else if (pkt->type == 5) { 
@@ -237,8 +279,30 @@ void OnDataRecv(const esp_now_recv_info_t * info, const uint8_t *incomingData, i
     preferences.putUInt("cp", color_peak);
     preferences.end();
     flag_theme_update = true;
+    globals_to_theme(active_theme); persist_theme(active_theme);
   }
-  
+  else if (pkt->type == 8) {
+    // Background gradient broadcast: c1/c2 = stops 2/3, c3 = background (stop 1),
+    // value packs type|stops|angle (see handleGrad).
+    color_background2 = pkt->c1;
+    color_background3 = pkt->c2;
+    color_background  = pkt->c3;
+    uint32_t v = (uint32_t)pkt->value;
+    bg_grad_type  = (uint8_t)(v & 0x0F);
+    bg_grad_stops = (uint8_t)((v >> 4) & 0x0F);
+    bg_grad_angle = (uint16_t)((v >> 8) & 0xFFFF);
+    preferences.begin("gauge", false);
+    preferences.putUInt("cbg", color_background);
+    preferences.putUInt("cbg2", color_background2);
+    preferences.putUInt("cbg3", color_background3);
+    preferences.putUChar("cgt", bg_grad_type);
+    preferences.putUChar("cgs", bg_grad_stops);
+    preferences.putUShort("cga", bg_grad_angle);
+    preferences.end();
+    flag_theme_update = true;
+    globals_to_theme(active_theme); persist_theme(active_theme);
+  }
+
 }
 
 void broadcast_packet(EspNowPacket *pkt) {
@@ -280,9 +344,88 @@ String macToString(uint8_t *mac) {
   char buf[18]; snprintf(buf, sizeof(buf), "%02X:%02X:%02X:%02X:%02X:%02X", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]); return String(buf);
 }
 
+// --- THEME SLOTS ---
+// Copy a stored slot into the live colour globals (used by the renderer).
+void theme_to_globals(uint8_t i) {
+  if (i >= THEME_SLOTS) return;
+  const GaugeTheme &t = themes[i];
+  text_color = t.text; color_low = t.low; color_mid = t.mid; color_high = t.high;
+  color_background = t.background; color_mode_label = t.mode_label;
+  color_link_icon = t.link_icon; needle_color = t.needle; color_peak = t.peak;
+  color_background2 = t.bg_grad2; color_background3 = t.bg_grad3;
+  bg_grad_type = t.bg_grad_type; bg_grad_stops = t.bg_grad_stops; bg_grad_angle = t.bg_grad_angle;
+}
+// Capture the current live colour globals back into a slot (after a web edit).
+void globals_to_theme(uint8_t i) {
+  if (i >= THEME_SLOTS) return;
+  GaugeTheme &t = themes[i];
+  t.text = text_color; t.low = color_low; t.mid = color_mid; t.high = color_high;
+  t.background = color_background; t.mode_label = color_mode_label;
+  t.link_icon = color_link_icon; t.needle = needle_color; t.peak = color_peak;
+  t.bg_grad2 = color_background2; t.bg_grad3 = color_background3;
+  t.bg_grad_type = bg_grad_type; t.bg_grad_stops = bg_grad_stops; t.bg_grad_angle = bg_grad_angle;
+}
+// NVS key for one slot field, e.g. "t2_bg" (stays well under the 15-char limit).
+static void theme_key(char *buf, uint8_t slot, const char *field) {
+  snprintf(buf, 8, "t%u_%s", slot, field);
+}
+// Persist one slot to NVS. Opens/closes prefs itself — call when prefs are closed.
+void persist_theme(uint8_t i) {
+  if (i >= THEME_SLOTS) return;
+  char k[8]; const GaugeTheme &t = themes[i];
+  preferences.begin("gauge", false);
+  theme_key(k,i,"tx"); preferences.putUInt(k, t.text);
+  theme_key(k,i,"lo"); preferences.putUInt(k, t.low);
+  theme_key(k,i,"mi"); preferences.putUInt(k, t.mid);
+  theme_key(k,i,"hi"); preferences.putUInt(k, t.high);
+  theme_key(k,i,"bg"); preferences.putUInt(k, t.background);
+  theme_key(k,i,"ml"); preferences.putUInt(k, t.mode_label);
+  theme_key(k,i,"li"); preferences.putUInt(k, t.link_icon);
+  theme_key(k,i,"nd"); preferences.putUInt(k, t.needle);
+  theme_key(k,i,"pk"); preferences.putUInt(k, t.peak);
+  theme_key(k,i,"b2"); preferences.putUInt(k, t.bg_grad2);
+  theme_key(k,i,"b3"); preferences.putUInt(k, t.bg_grad3);
+  theme_key(k,i,"gt"); preferences.putUChar(k, t.bg_grad_type);
+  theme_key(k,i,"gs"); preferences.putUChar(k, t.bg_grad_stops);
+  theme_key(k,i,"ga"); preferences.putUShort(k, t.bg_grad_angle);
+  preferences.end();
+}
+// Load all four slots from NVS. Slot 0 defaults to the already-loaded live theme
+// (the legacy ct/cl/... keys), so an existing single theme migrates seamlessly;
+// slots 1-3 default to the distinct factory palettes. Call with prefs closed.
+void load_all_themes() {
+  char k[8];
+  for (uint8_t i = 0; i < THEME_SLOTS; i++) {
+    GaugeTheme d = THEME_DEFAULTS[i];
+    if (i == 0) {  // slot 0 default = the current live (legacy) theme
+      d.text = text_color; d.low = color_low; d.mid = color_mid; d.high = color_high;
+      d.background = color_background; d.mode_label = color_mode_label;
+      d.link_icon = color_link_icon; d.needle = needle_color; d.peak = color_peak;
+      d.bg_grad2 = color_background2; d.bg_grad3 = color_background3;
+      d.bg_grad_type = bg_grad_type; d.bg_grad_stops = bg_grad_stops; d.bg_grad_angle = bg_grad_angle;
+    }
+    preferences.begin("gauge", true);
+    theme_key(k,i,"tx"); themes[i].text       = preferences.getUInt(k, d.text);
+    theme_key(k,i,"lo"); themes[i].low        = preferences.getUInt(k, d.low);
+    theme_key(k,i,"mi"); themes[i].mid        = preferences.getUInt(k, d.mid);
+    theme_key(k,i,"hi"); themes[i].high       = preferences.getUInt(k, d.high);
+    theme_key(k,i,"bg"); themes[i].background = preferences.getUInt(k, d.background);
+    theme_key(k,i,"ml"); themes[i].mode_label = preferences.getUInt(k, d.mode_label);
+    theme_key(k,i,"li"); themes[i].link_icon  = preferences.getUInt(k, d.link_icon);
+    theme_key(k,i,"nd"); themes[i].needle     = preferences.getUInt(k, d.needle);
+    theme_key(k,i,"pk"); themes[i].peak       = preferences.getUInt(k, d.peak);
+    theme_key(k,i,"b2"); themes[i].bg_grad2   = preferences.getUInt(k, d.bg_grad2);
+    theme_key(k,i,"b3"); themes[i].bg_grad3   = preferences.getUInt(k, d.bg_grad3);
+    theme_key(k,i,"gt"); themes[i].bg_grad_type  = preferences.getUChar(k, d.bg_grad_type);
+    theme_key(k,i,"gs"); themes[i].bg_grad_stops = preferences.getUChar(k, d.bg_grad_stops);
+    theme_key(k,i,"ga"); themes[i].bg_grad_angle = preferences.getUShort(k, d.bg_grad_angle);
+    preferences.end();
+  }
+}
+
 void handleRoot() {
   String html;
-  html.reserve(6500); // pre-allocate to avoid repeated heap reallocs under PSRAM pressure
+  html.reserve(7400); // pre-allocate to avoid repeated heap reallocs under PSRAM pressure
   html = "<html><head><meta charset='utf-8'><meta name='viewport' content='width=device-width, initial-scale=1'><style>"
          "*{box-sizing:border-box}"
          "body{font-family:system-ui,'Segoe UI',Roboto,sans-serif;background:#0a0b0d;color:#e9eaec;margin:0 auto;padding:16px;max-width:540px}"
@@ -311,14 +454,37 @@ void handleRoot() {
          "small{color:#5f6670;font-size:12px}#brval{color:#ff8a00;font-weight:700;font-size:18px}"
          "</style></head><body>";
   html += "<h1>" + device_name + "</h1>";
-  html += "<div class='status'><span class='chip'><b id='chippeers'>" + String(fleet_count) + "</b> peers</span><span class='chip'>Mode <b id='chipmode'>" + String(MODE_NAMES[current_mode]) + "</b></span><span class='chip'>Page <b id='chippage'>" + String(current_page==PAGE_GAUGE?"GAUGE":"GLOWCRAFT") + "</b></span></div>";
+  html += "<div class='status'><span class='chip'><b id='chippeers'>" + String(fleet_count) + "</b> peers</span><span class='chip'>Mode <b id='chipmode'>" + String(MODE_NAMES[current_mode]) + "</b></span><span class='chip'>Page <b id='chippage'>" + String(current_page==PAGE_GAUGE?"GAUGE":"GLOWCRAFT") + "</b></span><span class='chip'>Theme <b id='chipslot'>P" + String(active_theme) + "</b>" + String(trimpot_theme_sync?" \xE2\x9F\xB2":"") + "</span></div>";
   html += "<div class='card'><h3>Device Name</h3><form action='/name' method='get'><input type='text' name='n' value='" + device_name + "' maxlength='20'><button class='danger'>Rename</button></form><small>WiFi AP name (Haltech-[name]). Restarts device.</small></div>";
   
+  html += "<div class='card'><h3>Trimpot Theme Sync</h3>";
+  html += "<button id='tpsync' class='" + String(trimpot_theme_sync?"on":"") + "' onclick=\"tgl('/themesync','tpsync','Trim Sync: ')\">Trim Sync: " + String(trimpot_theme_sync?"ON":"OFF") + "</button>";
+  html += "<span class='lbl'>Editing slot (Rotary Trim 3 position)</span><div class='row'>";
+  for (int i = 0; i < THEME_SLOTS; i++)
+    html += "<button id='sl" + String(i) + "' class='sl" + String(active_theme==i?" active":"") + "' onclick=\"setSlot(" + String(i) + ",this)\">P" + String(i) + "</button>";
+  html += "</div><small>The colours below edit the selected slot. With Trim Sync ON, Rotary Trim 3 selects the live slot automatically.</small></div>";
+
   html += "<div class='card'><h3>Dynamic Elements</h3><form action='/theme' method='get' onsubmit='return subm(event,this)'><div class='crow'><label>Text</label><input type='color' name='ct' value='" + colorToHex(text_color) + "'></div><div class='crow'><label>Low</label><input type='color' name='cl' value='" + colorToHex(color_low) + "'></div><div class='crow'><label>Mid</label><input type='color' name='cm' value='" + colorToHex(color_mid) + "'></div><div class='crow'><label>High</label><input type='color' name='ch' value='" + colorToHex(color_high) + "'></div><button class='primary'>Apply to ALL</button></form></div>";
 
 
 
   html += "<div class='card'><h3>Static Elements</h3><form action='/uicolors' method='get' onsubmit='return subm(event,this)'><div class='crow'><label>Background</label><input type='color' name='cbg' value='" + colorToHex(color_background) + "'></div><div class='crow'><label>Mode Label</label><input type='color' name='cml' value='" + colorToHex(color_mode_label) + "'></div><div class='crow'><label>Link Icon</label><input type='color' name='cli' value='" + colorToHex(color_link_icon) + "'></div><div class='crow'><label>Needle</label><input type='color' name='cn' value='" + colorToHex(needle_color) + "'></div><div class='crow'><label>Peak Stripe</label><input type='color' name='cp' value='" + colorToHex(color_peak) + "'></div><button class='primary'>Apply to ALL</button></form></div>";
+
+  // BACKGROUND GRADIENT (per active slot). Stop 1 = the slot background colour.
+  {
+    const char* GT[6] = {"Solid","Linear \xE2\x86\x95","Linear \xE2\x86\x94","Linear \xE2\x88\xA0","Radial","Conical"};
+    html += "<div class='card'><h3>Background Gradient</h3><form action='/grad' method='get' onsubmit='return subm(event,this)'>";
+    html += "<div class='crow'><label>Type</label><select name='gt' id='gt' onchange='gradUI()'>";
+    for (int i = 0; i < 6; i++) html += "<option value='" + String(i) + "'" + String(bg_grad_type==i?" selected":"") + ">" + String(GT[i]) + "</option>";
+    html += "</select></div>";
+    html += "<div class='crow'><label>Stops</label><select name='gs' id='gs' onchange='gradUI()'><option value='2'" + String(bg_grad_stops==2?" selected":"") + ">2</option><option value='3'" + String(bg_grad_stops==3?" selected":"") + ">3</option></select></div>";
+    html += "<div class='crow'><label>Stop 1 (Background)</label><input type='color' name='cbg' value='" + colorToHex(color_background) + "'></div>";
+    html += "<div class='crow'><label>Stop 2</label><input type='color' name='b2' value='" + colorToHex(color_background2) + "'></div>";
+    html += "<div class='crow' id='b3row'><label>Stop 3</label><input type='color' name='b3' value='" + colorToHex(color_background3) + "'></div>";
+    html += "<div class='crow' id='garow'><label>Angle</label><span id='gaval'>" + String(bg_grad_angle) + "\xC2\xB0</span></div>";
+    html += "<input type='range' id='ga' name='ga' min='0' max='360' value='" + String(bg_grad_angle) + "' oninput=\"document.getElementById('gaval').textContent=this.value+'\xC2\xB0'\">";
+    html += "<button class='primary'>Apply to ALL</button></form><small>Stop 1 is the slot background. Angle applies to Linear \xE2\x88\xA0 and Conical.</small></div>";
+  }
 
   html += "<div class='card'><h3>Global Controls</h3>";
   html += "<div class='crow'><label>Brightness</label><span id='brval'>" + String(current_brightness) + "</span></div>";
@@ -386,6 +552,12 @@ void handleRoot() {
           "function subm(ev,f){ev.preventDefault();post(f.getAttribute('action')+'?'+new URLSearchParams(new FormData(f)).toString(),f.querySelector('button'));return false;}"
           "function setBright(v,b){post('/bright?b='+v,b);}"
           "function rem(u,b){post(u,b);}"
+          "function setSlot(s,b){gt('/themeslot?s='+s).then(function(){location.reload();}).catch(function(){flash(b,0);});}"
+          // Show/hide gradient sub-controls: stop-3 only when 3 stops, angle only for Linear-angle(3)/Conical(5).
+          "function gradUI(){var t=+document.getElementById('gt').value,s=+document.getElementById('gs').value;"
+          "document.getElementById('b3row').style.display=(t!=0&&s==3)?'':'none';"
+          "var ang=(t==3||t==5);document.getElementById('garow').style.display=ang?'':'none';document.getElementById('ga').style.display=ang?'':'none';}"
+          "gradUI();"
           "</script>";
   html += "</body></html>";
   server.send(200, "text/html", html);
@@ -401,6 +573,7 @@ void handleTheme() {
         EspNowPacket pkt = {}; pkt.type = 3; pkt.c1=text_color; pkt.c2=color_low; pkt.c3=color_mid; pkt.c4=color_high;
         broadcast_packet(&pkt);
         flag_theme_update = true;
+        globals_to_theme(active_theme); persist_theme(active_theme);  // edit lands in the active slot
     }
     server.send(200, "text/plain", "OK");
 }
@@ -662,8 +835,65 @@ void handleUIColors() {
         pkt.value = (int)color_peak;
         broadcast_packet(&pkt);
         flag_theme_update = true;
+        globals_to_theme(active_theme); persist_theme(active_theme);  // edit lands in the active slot
     }
     server.send(200, "text/plain", "OK");
+}
+
+// Background gradient editor. Sets the live gradient globals, persists the legacy
+// live keys (for slot-0 migration), broadcasts to the fleet (type 8), and folds the
+// edit into the active theme slot — mirroring handleUIColors().
+void handleGrad() {
+    if (server.hasArg("gt")) {
+        color_background  = hexToColor(server.arg("cbg"));
+        color_background2 = hexToColor(server.arg("b2"));
+        color_background3 = hexToColor(server.arg("b3"));
+        bg_grad_type  = (uint8_t)constrain(server.arg("gt").toInt(), 0, 5);
+        bg_grad_stops = (server.arg("gs").toInt() == 3) ? 3 : 2;
+        bg_grad_angle = (uint16_t)constrain(server.arg("ga").toInt(), 0, 360);
+        preferences.begin("gauge", false);
+        preferences.putUInt("cbg", color_background);
+        preferences.putUInt("cbg2", color_background2);
+        preferences.putUInt("cbg3", color_background3);
+        preferences.putUChar("cgt", bg_grad_type);
+        preferences.putUChar("cgs", bg_grad_stops);
+        preferences.putUShort("cga", bg_grad_angle);
+        preferences.end();
+        // Fleet sync: c1/c2 = stops 2/3, c3 = background (stop 1), value packs type|stops|angle.
+        EspNowPacket pkt = {}; pkt.type = 8;
+        pkt.c1 = color_background2; pkt.c2 = color_background3; pkt.c3 = color_background;
+        pkt.value = (int)((uint32_t)bg_grad_type | ((uint32_t)bg_grad_stops << 4) | ((uint32_t)bg_grad_angle << 8));
+        broadcast_packet(&pkt);
+        flag_theme_update = true;
+        globals_to_theme(active_theme); persist_theme(active_theme);  // edit lands in the active slot
+    }
+    server.send(200, "text/plain", "OK");
+}
+
+// Toggle the rotary-driven theme link. Enabling it snaps to the rotary's last
+// known position immediately so the user doesn't have to twist the knob first.
+void handleThemeSync() {
+    trimpot_theme_sync = !trimpot_theme_sync;
+    preferences.begin("gauge", false); preferences.putBool("tpsync", trimpot_theme_sync); preferences.end();
+    if (trimpot_theme_sync && last_trimpot3 >= 0 && last_trimpot3 < THEME_SLOTS) {
+        active_theme = (uint8_t)last_trimpot3;
+        preferences.begin("gauge", false); preferences.putUInt("atheme", active_theme); preferences.end();
+        theme_to_globals(active_theme);
+        flag_theme_update = true;
+    }
+    server.send(200, "text/plain", trimpot_theme_sync ? "1" : "0");
+}
+
+// Select which slot is live / being edited (web-side preview; rotary overrides
+// this when sync is on and the knob moves).
+void handleThemeSlot() {
+    if (server.hasArg("s")) {
+        active_theme = (uint8_t)constrain(server.arg("s").toInt(), 0, THEME_SLOTS - 1);
+        preferences.begin("gauge", false); preferences.putUInt("atheme", active_theme); preferences.end();
+        theme_to_globals(active_theme);
+        flag_theme_update = true;
+    }
+    server.send(200, "text/plain", String((int)active_theme));
 }
 
 void setup_wifi() {
@@ -688,6 +918,8 @@ void setup_wifi() {
   server.on("/bright", handleBright); server.on("/test", handleTest); server.on("/stats", handleStats); server.on("/debug", handleDebug);
   server.on("/peak", handlePeak); server.on("/uicolors", handleUIColors); server.on("/font", handleFont);
   server.on("/secondary", handleSecondary); server.on("/page", handlePage);
+  server.on("/themesync", handleThemeSync); server.on("/themeslot", handleThemeSlot);
+  server.on("/grad", handleGrad);
   server.on("/preview", handlePreview); server.on("/snapshot", handleSnapshot);
   server.on("/ota", HTTP_GET, handleOTAPage);
   server.on("/ota", HTTP_POST, handleOTADone, handleOTAUpload);
@@ -739,9 +971,48 @@ void common_label_setup() {
     lv_obj_set_style_text_font(val_label_dec, font_mid, 0);
 }
 
+// Paint the gauge-screen background: a flat colour when bg_grad_type==0, otherwise a
+// 2/3-stop gradient (vertical, horizontal, angled-linear, radial, or conical). The
+// descriptor must persist — the style stores a pointer to it, not a copy — so it is
+// static. Screen is the fixed 480x480 round panel; centre is (240,240).
+static lv_grad_dsc_t bg_grad_dsc;
+void apply_background(lv_obj_t *scr) {
+    lv_obj_set_style_bg_color(scr, lv_color_hex(color_background), 0);  // stop 1 / solid fallback
+    if (bg_grad_type == 0) {
+        lv_obj_set_style_bg_grad(scr, NULL, 0);  // clear any gradient left by a previous slot
+        return;
+    }
+    uint8_t n = (bg_grad_stops == 3) ? 3 : 2;
+    lv_color_t cols[3] = { lv_color_hex(color_background),
+                           lv_color_hex(color_background2),
+                           lv_color_hex(color_background3) };
+    lv_grad_init_stops(&bg_grad_dsc, cols, NULL, NULL, n);  // NULL fracs/opa = even stops, opaque
+
+    const int32_t W = 480, H = 480, CX = 240, CY = 240;
+    switch (bg_grad_type) {
+        case 1:  // linear vertical (top -> bottom)
+            lv_grad_linear_init(&bg_grad_dsc, 0, 0, 0, H, LV_GRAD_EXTEND_PAD); break;
+        case 2:  // linear horizontal (left -> right)
+            lv_grad_linear_init(&bg_grad_dsc, 0, 0, W, 0, LV_GRAD_EXTEND_PAD); break;
+        case 3: { // linear at an angle, through the centre
+            float a = bg_grad_angle * 3.14159265f / 180.0f;
+            int32_t dx = (int32_t)(cosf(a) * 340.0f), dy = (int32_t)(sinf(a) * 340.0f);
+            lv_grad_linear_init(&bg_grad_dsc, CX - dx, CY - dy, CX + dx, CY + dy, LV_GRAD_EXTEND_PAD);
+            break;
+        }
+        case 4:  // radial: centre -> right edge (radius 240)
+            lv_grad_radial_init(&bg_grad_dsc, LV_GRAD_CENTER, LV_GRAD_CENTER, LV_GRAD_RIGHT, LV_GRAD_CENTER, LV_GRAD_EXTEND_PAD); break;
+        case 5:  // conical sweep from bg_grad_angle
+            lv_grad_conical_init(&bg_grad_dsc, LV_GRAD_CENTER, LV_GRAD_CENTER, bg_grad_angle, bg_grad_angle + 359, LV_GRAD_EXTEND_PAD); break;
+        default:
+            lv_obj_set_style_bg_grad(scr, NULL, 0); return;
+    }
+    lv_obj_set_style_bg_grad(scr, &bg_grad_dsc, 0);
+}
+
 void load_current_style() {
     lv_obj_clean(gauge_scr);
-    lv_obj_set_style_bg_color(gauge_scr, lv_color_hex(color_background), 0);
+    apply_background(gauge_scr);
 
     //lv_obj_t * img = lv_image_create(gauge_scr);
     //lv_image_set_src(img, &gauge_bg);
@@ -1205,6 +1476,24 @@ void process_can_queue_task(void *arg) {
           HaltechData.afr_gas      = (raw_lambda / 1000.0) * 14.7;
           break;
         }
+        case 0x3E4: {
+          // Rotary Trim 3 (byte 6, 4-position rotary returning 0-3). When theme
+          // sync is enabled it selects the live colour slot — debounced so only
+          // an actual position change rebuilds the theme. The heavy LVGL work is
+          // deferred to loop() via flag_theme_update (this runs in the CAN task).
+          if (message.data_length_code > 6) {
+            int pos = message.data[6];
+            if (pos >= 0 && pos < THEME_SLOTS && pos != last_trimpot3) {
+              last_trimpot3 = pos;
+              if (trimpot_theme_sync) {
+                active_theme = (uint8_t)pos;
+                theme_to_globals(active_theme);
+                flag_theme_update = true;
+              }
+            }
+          }
+          break;
+        }
         default:
           // GlowCraft strip-status frames (0x500+) — decoded in their own module.
           glowcraft_decode(&message);
@@ -1274,6 +1563,11 @@ void setup() {
   color_link_icon = preferences.getUInt("cli", 0x00C851);
   needle_color = preferences.getUInt("cn", 0xFF6600);
   color_peak = preferences.getUInt("cp", 0xFFFFFF);
+  color_background2 = preferences.getUInt("cbg2", 0x000000);
+  color_background3 = preferences.getUInt("cbg3", 0x000000);
+  bg_grad_type = preferences.getUChar("cgt", 0);
+  bg_grad_stops = preferences.getUChar("cgs", 2);
+  bg_grad_angle = preferences.getUShort("cga", 0);
   current_brightness = preferences.getInt("bright", 40);
   peak_hold_enabled = preferences.getBool("peak", true);
   debug_mode_enabled = preferences.getBool("dbg", false);
@@ -1281,7 +1575,15 @@ void setup() {
   device_name = preferences.getString("devname", defaultName);
   secondary_metric = (uint8_t)preferences.getUInt("sm", 0);
   current_page = (DisplayPage)preferences.getUInt("page", 0);
+  active_theme = (uint8_t)preferences.getUInt("atheme", 0);
+  trimpot_theme_sync = preferences.getBool("tpsync", false);
   preferences.end();
+  if (active_theme >= THEME_SLOTS) active_theme = 0;
+
+  // Build the four theme slots (slot 0 = the legacy theme just loaded above),
+  // then make the saved active slot live before the first style pass.
+  load_all_themes();
+  theme_to_globals(active_theme);
 
   gauge_scr = lv_scr_act();   // the default screen holds the gauge UI
   load_current_style();

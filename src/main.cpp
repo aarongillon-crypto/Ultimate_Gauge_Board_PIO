@@ -18,6 +18,13 @@
 #include <Update.h>
 #include <math.h>
 
+// --- FIRMWARE VERSION ---
+// Bump FIRMWARE_VERSION on each release. FIRMWARE_BUILD is stamped automatically
+// by the compiler every build, so it always changes even if the version is not
+// bumped -- use it to confirm an OTA upload actually took effect.
+#define FIRMWARE_VERSION "1.0.2"
+#define FIRMWARE_BUILD   __DATE__ " " __TIME__
+
 // --- CONFIGURATION ---
 bool test_mode_enabled = false;
 bool show_perf_stats = false;
@@ -559,6 +566,7 @@ void handleRoot() {
           "var ang=(t==3||t==5);document.getElementById('garow').style.display=ang?'':'none';document.getElementById('ga').style.display=ang?'':'none';}"
           "gradUI();"
           "</script>";
+  html += "<footer style='text-align:center;opacity:0.5;font-size:12px;margin:24px 0 10px'>v" FIRMWARE_VERSION " &middot; built " FIRMWARE_BUILD "</footer>";
   html += "</body></html>";
   server.send(200, "text/html", html);
 }
@@ -1107,6 +1115,32 @@ void load_current_style() {
     current_applied_text = 0;
 }
 
+// Apply the current theme's colours (plus background gradient and value-label
+// font) to the EXISTING gauge objects, WITHOUT tearing the screen down. Every
+// theme/colour/gradient/font change routes here. A full rebuild via
+// load_current_style() on each switch fragmented LVGL's heap until glyph
+// allocation failed, rendering text as boxes; updating styles in place avoids
+// that churn entirely (and is far faster).
+void apply_theme_colors() {
+    if (!gauge_scr || !val_label_int) return;  // gauge UI not built yet
+    apply_background(gauge_scr);
+    lv_obj_set_style_text_color(val_label_int,   lv_color_hex(text_color), 0);
+    lv_obj_set_style_text_color(val_label_dec,   lv_color_hex(text_color), 0);
+    lv_obj_set_style_text_color(mode_label,      lv_color_hex(color_mode_label), 0);
+    lv_obj_set_style_text_color(link_icon,       lv_color_hex(color_link_icon), 0);
+    lv_obj_set_style_text_color(peak_high_label, lv_color_hex(color_peak), 0);
+    lv_obj_set_style_text_color(peak_low_label,  lv_color_hex(color_peak), 0);
+    lv_obj_set_style_bg_color(peak_dot,          lv_color_hex(color_peak), 0);
+    lv_obj_set_style_line_color(needle_tip,      lv_color_hex(needle_color), 0);
+    lv_obj_set_style_border_color(bar,           lv_color_hex(color_low), 0);  // update_ui refreshes live
+#if FONT_FIRAMONO_AVAILABLE
+    const lv_font_t* font_large = (current_font == 1) ? &firamono_120 : &dseg14_120;
+    const lv_font_t* font_mid   = (current_font == 1) ? &firamono_96  : &dseg14_96;
+    lv_obj_set_style_text_font(val_label_int, font_large, 0);
+    lv_obj_set_style_text_font(val_label_dec, font_mid, 0);
+#endif
+}
+
 // --- GLOWCRAFT LED PAGE ---
 // Top-down Evo silhouette (front at top) with each LED strip drawn as a
 // coloured rectangle in its physical position. Layout is a table parallel to
@@ -1577,6 +1611,9 @@ void setup() {
   current_page = (DisplayPage)preferences.getUInt("page", 0);
   active_theme = (uint8_t)preferences.getUInt("atheme", 0);
   trimpot_theme_sync = preferences.getBool("tpsync", false);
+  // Crash-safe boot flag: set false before risky rendering, true once we light
+  // the panel. If it's still false here, the previous boot crashed/hung mid-render.
+  bool last_boot_completed = preferences.getBool("bootok", true);
   preferences.end();
   if (active_theme >= THEME_SLOTS) active_theme = 0;
 
@@ -1585,20 +1622,48 @@ void setup() {
   load_all_themes();
   theme_to_globals(active_theme);
 
+  // --- Crash-safe gradient guard (auto-unbrick) ---
+  // A heap-heavy gradient (radial/conical) can fail to render and crash before
+  // the panel ever lights. Because that happens before loop() runs, OTA can't
+  // recover it. If the last boot didn't complete, disable the active slot's
+  // gradient and persist it so we boot clean instead of crash-looping.
+  if (!last_boot_completed) {
+    Serial.println("[SAFE] Previous boot did not complete — disabling gradient (safe mode)");
+    bg_grad_type = 0;
+    themes[active_theme].bg_grad_type = 0;
+    preferences.begin("gauge", false);
+    preferences.putUChar("cgt", 0);
+    char k[8]; theme_key(k, active_theme, "gt"); preferences.putUChar(k, 0);
+    preferences.end();
+  }
+  // Mark boot as in-progress; cleared at the end of setup() once we've rendered
+  // and lit the backlight. A crash before then leaves this false -> safe mode.
+  preferences.begin("gauge", false);
+  preferences.putBool("bootok", false);
+  preferences.end();
+
   gauge_scr = lv_scr_act();   // the default screen holds the gauge UI
+  setup_wifi();               // bring up AP + web server + OTA BEFORE any risky
+                              // rendering so a bad style can never lock out OTA
   load_current_style();
   build_glowcraft_page();
   apply_page();               // load whichever page was last selected
-  setup_wifi();
 
   canMsgQueue = xQueueCreate(CAN_QUEUE_LENGTH, CAN_QUEUE_ITEM_SIZE);
   xTaskCreatePinnedToCore(receive_can_task, "RxCAN", 4096, NULL, 2, NULL, 1);
   xTaskCreatePinnedToCore(process_can_queue_task, "ProcCAN", 4096, NULL, 2, NULL, 1);
 
   // Render a few frames before enabling backlight — ensures the framebuffer
-  // contains valid content before it's visible, preventing startup corruption
-  for (int i = 0; i < 5; i++) lv_timer_handler();
+  // contains valid content before it's visible, preventing startup corruption.
+  // Pump OTA/web here too so recovery stays possible even if a render stalls.
+  for (int i = 0; i < 5; i++) { lv_timer_handler(); ArduinoOTA.handle(); server.handleClient(); }
   set_backlight(current_brightness);
+
+  // Boot fully succeeded (rendered + backlit) — clear the in-progress flag so the
+  // next boot is treated as clean. If we'd crashed above, this stays false.
+  preferences.begin("gauge", false);
+  preferences.putBool("bootok", true);
+  preferences.end();
 }
 
 void loop() {
@@ -1612,7 +1677,7 @@ void loop() {
   if (flag_reboot) { delay(500); ESP.restart(); }
   if (flag_theme_update) {
       flag_theme_update = false;
-      load_current_style(); 
+      apply_theme_colors();   // in-place colour/gradient/font update (no teardown)
   }
   if (flag_bright_update) {
       flag_bright_update = false;

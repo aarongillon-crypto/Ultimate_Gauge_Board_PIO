@@ -69,7 +69,7 @@
 
 #if LV_USE_STDLIB_MALLOC == LV_STDLIB_BUILTIN
     /** Size of memory available for `lv_malloc()` in bytes (>= 2kB) */
-    #define LV_MEM_SIZE (32 * 1024U)          /**< [bytes] - Reduced for BLE+WiFi coexistence */
+    #define LV_MEM_SIZE (64 * 1024U)          /**< [bytes] - 64K: complex gradients are heap-heavy; BLE removed so headroom is available */
 
     /** Size of the memory expand for `lv_malloc()` in bytes */
     #define LV_MEM_POOL_EXPAND_SIZE 0

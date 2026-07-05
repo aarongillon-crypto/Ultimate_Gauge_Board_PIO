@@ -242,7 +242,7 @@ A new page on the Ultimate Gauge Board (IC-7 replacement project, ESP32-P4 / M5S
 | BOV / Transient Throttle | Haltech | `0x3E4` | 5 Hz |
 | Rotary Trim 3 | Haltech | `0x3E4` | 5 Hz |
 
-> **Note:** The Haltech rows above are decoded by the **GlowCraft** to drive its shows — the gauge firmware does **not** decode them. They are listed for reference only. The gauge page is driven solely by the GlowCraft strip-status frames (`0x500`–`0x507`). The one exception is a possible future feature: page-switching from Rotary Trim 3 (`0x3E4` byte 6), which would require the gauge to decode that frame at that point, or the GlowCraft to relay the rotary position in a strip-status frame.
+> **Note:** The Haltech rows above are decoded by the **GlowCraft** to drive its shows. The gauge page itself is driven solely by the GlowCraft strip-status frames (`0x500`–`0x507`). The **one exception** is **Rotary Trim 3** (`0x3E4` byte 6): the gauge firmware **does** decode this byte to drive **live theme switching** — each of the 4 rotary positions (`0`–`3`) selects one of four colour palettes (theme slots), mirroring the GlowCraft show the same knob selects. This is gated by a "Trimpot Theme Sync" toggle in the web UI (off by default); when off, the byte is read but ignored. The decode is debounced on position change. A future extension could reuse the same byte for page-switching (Gauge ⇄ GlowCraft). No other `0x3E4` field is decoded by the gauge.
 
 ### 7.3 Panel visualisation — layout intent
 

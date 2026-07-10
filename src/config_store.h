@@ -25,6 +25,8 @@ void cfg_put_string(const char* key, const String& v);
 // Theme-slot persistence (keys t{slot}_xx — schema owned here).
 void cfg_persist_theme_slot(uint8_t slot, const GaugeTheme& t);
 void cfg_load_theme_slot(uint8_t slot, const GaugeTheme& dflt, GaugeTheme* out);
+void cfg_put_theme_name(uint8_t slot, const String& name);      // key t{slot}_nm
+String cfg_load_theme_name(uint8_t slot, const char* dflt);
 // Safe-mode: zero the gradient type on the legacy live key AND the slot key.
 void cfg_disable_gradient(uint8_t slot);
 

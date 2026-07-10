@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gauge</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<h1 id="devname">Gauge</h1>
+<div class="status">
+  <span class="chip"><b id="chippeers">0</b> peers</span>
+  <span class="chip">Mode <b id="chipmode">--</b></span>
+  <span class="chip">Page <b id="chippage">--</b></span>
+  <span class="chip">Theme <b id="chipslot">--</b></span>
+  <span class="chip">CAN <b id="chipcan">--</b></span>
+</div>
+
+<div class="card">
+  <h3>Theme Slots</h3>
+  <div id="slots"></div>
+  <div class="row" style="margin-top:10px">
+    <button id="tpsync" onclick="tglSync()">Trim Sync: --</button>
+    <button onclick="toggleImport()">Import Theme…</button>
+  </div>
+  <div id="importbox" class="hidden">
+    <span class="lbl">Paste theme JSON, pick target slot, Apply</span>
+    <textarea id="importjson" placeholder='{"fmt":"ugb-theme","v":1,...}'></textarea>
+    <div class="crow"><label>Into slot</label><select id="importslot"><option>0</option><option>1</option><option>2</option><option>3</option></select>
+    <button class="sm primary" onclick="importTheme()">Apply</button></div>
+  </div>
+  <small>Activate makes a slot live. Editing the ACTIVE slot applies immediately and pushes to all connected gauges. With Trim Sync ON, Rotary Trim 3 selects the live slot.</small>
+</div>
+
+<div class="card hidden" id="editor">
+  <h3>Edit Slot <span id="edslot">0</span></h3>
+  <input type="text" id="edname" maxlength="20" placeholder="Slot name">
+  <span class="lbl">Dynamic Elements</span>
+  <div class="crow"><label>Text</label><input type="color" id="c_text"></div>
+  <div class="crow"><label>Low</label><input type="color" id="c_low"></div>
+  <div class="crow"><label>Mid</label><input type="color" id="c_mid"></div>
+  <div class="crow"><label>High</label><input type="color" id="c_high"></div>
+  <span class="lbl">Static Elements</span>
+  <div class="crow"><label>Background (Stop 1)</label><input type="color" id="c_bg"></div>
+  <div class="crow"><label>Mode Label</label><input type="color" id="c_modeLabel"></div>
+  <div class="crow"><label>Link Icon</label><input type="color" id="c_linkIcon"></div>
+  <div class="crow"><label>Needle</label><input type="color" id="c_needle"></div>
+  <div class="crow"><label>Peak</label><input type="color" id="c_peak"></div>
+  <span class="lbl">Background Gradient</span>
+  <div class="crow"><label>Type</label><select id="g_type" onchange="gradUI()">
+    <option value="0">Solid</option><option value="1">Linear &#8597;</option><option value="2">Linear &#8596;</option>
+    <option value="3">Linear &#8736;</option><option value="4">Radial</option><option value="5">Conical</option>
+  </select></div>
+  <div class="crow" id="gsrow"><label>Stops</label><select id="g_stops" onchange="gradUI()"><option value="2">2</option><option value="3">3</option></select></div>
+  <div class="crow" id="g2row"><label>Stop 2</label><input type="color" id="c_g2"></div>
+  <div class="crow" id="g3row"><label>Stop 3</label><input type="color" id="c_g3"></div>
+  <div class="crow" id="garow"><label>Angle</label><span id="gaval">0&deg;</span></div>
+  <input type="range" id="g_angle" min="0" max="360" value="0" oninput="document.getElementById('gaval').textContent=this.value+'°'">
+  <div class="row3">
+    <button class="primary" onclick="saveTheme()">Save</button>
+    <button onclick="exportTheme()">Export</button>
+    <button onclick="closeEditor()">Close</button>
+  </div>
+  <small id="edhint"></small>
+</div>
+
+<div class="card">
+  <h3>Global Controls</h3>
+  <div class="crow"><label>Brightness</label><span id="brval">--</span></div>
+  <input type="range" id="bright" min="10" max="100" value="40"
+    oninput="document.getElementById('brval').textContent=this.value"
+    onchange="act('bright','?v='+this.value)">
+  <div class="row">
+    <button id="test" onclick="tglBtn('test')">Test: --</button>
+    <button id="stats" onclick="tglBtn('stats')">Stats: --</button>
+    <button id="dbg" onclick="tglBtn('dbg')">Debug: --</button>
+    <button id="font" onclick="tglFont()">Font: --</button>
+  </div>
+  <div class="row" style="margin-top:9px">
+    <button onclick="location='/preview'">Live Preview</button>
+    <button onclick="location='/ota'">OTA Update</button>
+  </div>
+</div>
+
+<div class="card">
+  <h3>Display Page</h3>
+  <div class="row">
+    <button id="pg0" onclick="setPage(0)">Gauge</button>
+    <button id="pg1" onclick="setPage(1)">GlowCraft</button>
+  </div>
+</div>
+
+<div class="card">
+  <h3>Local Gauge</h3>
+  <button id="peak" onclick="tglBtn('peak')">Peak Hold: --</button>
+  <span class="lbl">Secondary metric (Peak Hold OFF)</span>
+  <div class="crow">
+    <select id="sec" style="flex:1"></select>
+    <button class="sm primary" onclick="act('sec','?v='+document.getElementById('sec').value)">Set</button>
+  </div>
+  <span class="lbl">Display Metric</span>
+  <div class="row">
+    <button class="m" id="m0" onclick="setMode(0)">Boost</button>
+    <button class="m" id="m1" onclick="setMode(1)">AFR</button>
+    <button class="m" id="m2" onclick="setMode(2)">Water</button>
+    <button class="m" id="m3" onclick="setMode(3)">Oil</button>
+  </div>
+</div>
+
+<div class="card" id="fleetcard">
+  <h3>Remote Gauges</h3>
+  <div id="fleet"><small>No peers seen yet.</small></div>
+</div>
+
+<div class="card">
+  <h3>Device Name</h3>
+  <input type="text" id="newname" maxlength="20">
+  <button class="danger" onclick="rename()">Rename (restarts device)</button>
+  <small>WiFi AP name (Haltech-[name]).</small>
+</div>
+
+<footer id="footer"></footer>
+<div class="toast" id="toast"></div>
+<script src="/app.js"></script>
+</body>
+</html>

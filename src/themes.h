@@ -7,6 +7,9 @@
 #pragma once
 #include "app_state.h"
 
+// Human-readable slot names (NVS t{n}_nm; defaults Custom/Street/Sport/Race).
+extern String theme_names[THEME_SLOTS];
+
 // Copy a stored slot into the live colour globals (used by the renderer).
 void theme_to_globals(uint8_t i);
 // Capture the current live colour globals back into a slot (after a web edit).

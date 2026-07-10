@@ -13,6 +13,9 @@ static const GaugeTheme THEME_DEFAULTS[THEME_SLOTS] = {
   {0xFFFFFF,0x00E676,0xFFEB3B,0xFF1744, 0x200000,0xBB5555,0xFF3B30,0xFF1744,0xFFFFFF, 0x080000,0x000000, 3,3,45},
 };
 
+String theme_names[THEME_SLOTS];
+static const char* THEME_NAME_DEFAULTS[THEME_SLOTS] = { "Custom", "Street", "Sport", "Race" };
+
 void theme_to_globals(uint8_t i) {
   if (i >= THEME_SLOTS) return;
   const GaugeTheme &t = themes[i];
@@ -49,6 +52,7 @@ void load_all_themes() {
       d.bg_grad_type = bg_grad_type; d.bg_grad_stops = bg_grad_stops; d.bg_grad_angle = bg_grad_angle;
     }
     cfg_load_theme_slot(i, d, &themes[i]);
+    theme_names[i] = cfg_load_theme_name(i, THEME_NAME_DEFAULTS[i]);
   }
 }
 

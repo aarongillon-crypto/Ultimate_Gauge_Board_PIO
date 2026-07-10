@@ -9,7 +9,7 @@
 // Bump FIRMWARE_VERSION on each release. FIRMWARE_BUILD is stamped automatically
 // by the compiler every build, so it always changes even if the version is not
 // bumped -- use it to confirm an OTA upload actually took effect.
-#define FIRMWARE_VERSION "1.2.0"
+#define FIRMWARE_VERSION "1.3.0"
 #define FIRMWARE_BUILD   __DATE__ " " __TIME__
 
 // --- MODES / PAGES ---

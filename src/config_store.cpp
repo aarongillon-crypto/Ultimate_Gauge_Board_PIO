@@ -71,6 +71,22 @@ void cfg_load_theme_slot(uint8_t slot, const GaugeTheme& d, GaugeTheme* out) {
   preferences.end();
 }
 
+void cfg_put_theme_name(uint8_t slot, const String& name) {
+  if (slot >= THEME_SLOTS) return;
+  guard_task();
+  char k[8]; theme_key(k, slot, "nm");
+  preferences.begin("gauge", false); preferences.putString(k, name); preferences.end();
+}
+
+String cfg_load_theme_name(uint8_t slot, const char* dflt) {
+  if (slot >= THEME_SLOTS) return String(dflt);
+  char k[8]; theme_key(k, slot, "nm");
+  preferences.begin("gauge", true);
+  String v = preferences.getString(k, dflt);
+  preferences.end();
+  return v;
+}
+
 void cfg_disable_gradient(uint8_t slot) {
   guard_task();
   preferences.begin("gauge", false);

@@ -1,0 +1,309 @@
+#include "api.h"
+#include "../app_state.h"
+#include "../config_store.h"
+#include "../themes.h"
+#include "../fleet.h"
+#include "../haltech_decode.h"
+#include "CANBus_Driver.h"
+#include "Display_ST7701.h"
+#include <ArduinoJson.h>
+#include <uri/UriBraces.h>
+
+static WebServer* srv = nullptr;
+
+static String hexStr(uint32_t c) {
+  char buf[8]; snprintf(buf, sizeof(buf), "#%06X", c); return String(buf);
+}
+static uint32_t parseHex(const char* s) {
+  if (!s) return 0;
+  if (*s == '#') s++;
+  return strtoul(s, NULL, 16);
+}
+
+// ---------- /api/state ----------
+static void apiState() {
+  HaltechData_t d;
+  haltech_get(&d);
+  JsonDocument doc;
+  doc["name"] = device_name;
+  doc["fw"] = FIRMWARE_VERSION;
+  doc["build"] = FIRMWARE_BUILD;
+  doc["mode"] = (int)current_mode;
+  doc["page"] = (int)current_page;
+  doc["bright"] = current_brightness;
+  doc["font"] = current_font;
+  doc["test"] = test_mode_enabled;
+  doc["stats"] = show_perf_stats;
+  doc["dbg"] = debug_mode_enabled;
+  doc["peak"] = peak_hold_enabled;
+  doc["sec"] = secondary_metric;
+  doc["slot"] = active_theme;
+  doc["tpsync"] = trimpot_theme_sync;
+  doc["peers"] = fleet_count;
+  doc["canOk"] = canbus_ok;
+  doc["uptime"] = millis() / 1000;
+  doc["heap"] = ESP.getFreeHeap();
+  JsonObject live = doc["live"].to<JsonObject>();
+  live["boost"] = d.boost_psi;   live["afr"] = d.afr_gas;
+  live["water"] = d.water_temp_c; live["oilp"] = d.oil_press_psi;
+  live["rpm"] = d.rpm;           live["iat"] = d.intake_air_temp_c;
+  live["oilt"] = d.oil_temp_c;   live["fuelp"] = d.fuel_press_psi;
+  live["tps"] = d.tps_percent;   live["spd"] = d.vehicle_speed_kph;
+  live["gear"] = d.gear;
+  String out; serializeJson(doc, out);
+  srv->send(200, "application/json", out);
+}
+
+// ---------- themes ----------
+static void themeToJson(uint8_t i, JsonObject o) {
+  const GaugeTheme& t = themes[i];
+  o["fmt"] = "ugb-theme"; o["v"] = 1;
+  o["name"] = theme_names[i];
+  JsonObject c = o["colors"].to<JsonObject>();
+  c["text"] = hexStr(t.text); c["low"] = hexStr(t.low);
+  c["mid"] = hexStr(t.mid);   c["high"] = hexStr(t.high);
+  c["bg"] = hexStr(t.background); c["modeLabel"] = hexStr(t.mode_label);
+  c["linkIcon"] = hexStr(t.link_icon); c["needle"] = hexStr(t.needle);
+  c["peak"] = hexStr(t.peak);
+  JsonObject g = o["gradient"].to<JsonObject>();
+  g["type"] = t.bg_grad_type; g["stops"] = t.bg_grad_stops;
+  g["angle"] = t.bg_grad_angle;
+  g["c2"] = hexStr(t.bg_grad2); g["c3"] = hexStr(t.bg_grad3);
+}
+
+static void apiThemesList() {
+  JsonDocument doc;
+  doc["active"] = active_theme;
+  JsonArray arr = doc["slots"].to<JsonArray>();
+  for (uint8_t i = 0; i < THEME_SLOTS; i++) themeToJson(i, arr.add<JsonObject>());
+  String out; serializeJson(doc, out);
+  srv->send(200, "application/json", out);
+}
+
+static void apiThemeGet() {
+  int i = srv->pathArg(0).toInt();
+  if (i < 0 || i >= THEME_SLOTS) { srv->send(404, "text/plain", "No such slot"); return; }
+  JsonDocument doc;
+  themeToJson((uint8_t)i, doc.to<JsonObject>());
+  String out; serializeJson(doc, out);
+  srv->send(200, "application/json", out);
+}
+
+// Broadcast the full active theme to the fleet via the v1 packet triple
+// (types 3 + 7 + 8) — same on-wire behavior as the old per-card "Apply to ALL".
+static void broadcastActiveTheme() {
+  EspNowPacket p = {};
+  p.type = 3; p.c1 = text_color; p.c2 = color_low; p.c3 = color_mid; p.c4 = color_high;
+  broadcast_packet(&p);
+  p = {}; p.type = 7; p.c1 = color_background; p.c2 = color_mode_label;
+  p.c3 = color_link_icon; p.c4 = needle_color; p.value = (int)color_peak;
+  broadcast_packet(&p);
+  p = {}; p.type = 8; p.c1 = color_background2; p.c2 = color_background3; p.c3 = color_background;
+  p.value = (int)((uint32_t)bg_grad_type | ((uint32_t)bg_grad_stops << 4) | ((uint32_t)bg_grad_angle << 8));
+  broadcast_packet(&p);
+}
+
+// POST /api/themes/{slot} — body is the theme JSON (doubles as import).
+// Persists the slot; if it's the active slot, applies live + pushes to fleet.
+static void apiThemeSet() {
+  int i = srv->pathArg(0).toInt();
+  if (i < 0 || i >= THEME_SLOTS) { srv->send(404, "text/plain", "No such slot"); return; }
+  String body = srv->arg("plain");
+  if (body.length() == 0 || body.length() > 4096) { srv->send(400, "text/plain", "Bad body"); return; }
+
+  JsonDocument doc;
+  if (deserializeJson(doc, body) != DeserializationError::Ok) { srv->send(400, "text/plain", "Bad JSON"); return; }
+  if (strcmp(doc["fmt"] | "", "ugb-theme") != 0 || (int)(doc["v"] | 0) != 1) {
+    srv->send(400, "text/plain", "Not a ugb-theme v1"); return;
+  }
+  JsonObject c = doc["colors"];
+  JsonObject g = doc["gradient"];
+  if (c.isNull() || g.isNull()) { srv->send(400, "text/plain", "Missing colors/gradient"); return; }
+
+  GaugeTheme t;
+  t.text = parseHex(c["text"]); t.low = parseHex(c["low"]);
+  t.mid = parseHex(c["mid"]);   t.high = parseHex(c["high"]);
+  t.background = parseHex(c["bg"]); t.mode_label = parseHex(c["modeLabel"]);
+  t.link_icon = parseHex(c["linkIcon"]); t.needle = parseHex(c["needle"]);
+  t.peak = parseHex(c["peak"]);
+  t.bg_grad2 = parseHex(g["c2"]); t.bg_grad3 = parseHex(g["c3"]);
+  t.bg_grad_type  = (uint8_t)constrain((int)(g["type"] | 0), 0, 5);
+  t.bg_grad_stops = ((int)(g["stops"] | 2) == 3) ? 3 : 2;
+  t.bg_grad_angle = (uint16_t)constrain((int)(g["angle"] | 0), 0, 360);
+
+  String name = String((const char*)(doc["name"] | ""));
+  name.trim();
+  if (name.length() == 0) name = "P" + String(i);
+  if (name.length() > 20) name = name.substring(0, 20);
+
+  themes[i] = t;
+  theme_names[i] = name;
+  persist_theme((uint8_t)i);
+  cfg_put_theme_name((uint8_t)i, name);
+
+  if ((uint8_t)i == active_theme) {
+    theme_to_globals(active_theme);
+    // Keep the legacy live keys in sync (slot-0 migration path reads them).
+    cfg_put_uint("ct", text_color); cfg_put_uint("cl", color_low);
+    cfg_put_uint("cm", color_mid);  cfg_put_uint("ch", color_high);
+    cfg_put_uint("cbg", color_background); cfg_put_uint("cml", color_mode_label);
+    cfg_put_uint("cli", color_link_icon);  cfg_put_uint("cn", needle_color);
+    cfg_put_uint("cp", color_peak);
+    cfg_put_uint("cbg2", color_background2); cfg_put_uint("cbg3", color_background3);
+    cfg_put_uchar("cgt", bg_grad_type); cfg_put_uchar("cgs", bg_grad_stops);
+    cfg_put_ushort("cga", bg_grad_angle);
+    flag_theme_update = true;
+    broadcastActiveTheme();   // active-slot edits behave like the old "Apply to ALL"
+  }
+  srv->send(200, "text/plain", "OK");
+}
+
+static void apiThemeActivate() {
+  int i = srv->pathArg(0).toInt();
+  if (i < 0 || i >= THEME_SLOTS) { srv->send(404, "text/plain", "No such slot"); return; }
+  active_theme = (uint8_t)i;
+  cfg_put_uint("atheme", active_theme);
+  theme_to_globals(active_theme);
+  flag_theme_update = true;
+  srv->send(200, "text/plain", String((int)active_theme));
+}
+
+static void apiThemeCopy() {
+  int dst = srv->pathArg(0).toInt();
+  int src = srv->hasArg("from") ? srv->arg("from").toInt() : -1;
+  if (dst < 0 || dst >= THEME_SLOTS || src < 0 || src >= THEME_SLOTS || src == dst) {
+    srv->send(400, "text/plain", "Bad slots"); return;
+  }
+  themes[dst] = themes[src];
+  theme_names[dst] = theme_names[src];
+  persist_theme((uint8_t)dst);
+  cfg_put_theme_name((uint8_t)dst, theme_names[dst]);
+  if ((uint8_t)dst == active_theme) { theme_to_globals(active_theme); flag_theme_update = true; }
+  srv->send(200, "text/plain", "OK");
+}
+
+// ---------- fleet ----------
+static void apiFleet() {
+  PeerGauge peers[10];
+  int n = fleet_snapshot(peers, 10);
+  JsonDocument doc;
+  JsonArray arr = doc["peers"].to<JsonArray>();
+  unsigned long now = millis();
+  for (int i = 0; i < n; i++) {
+    if (now - peers[i].last_seen >= 10000) continue;  // aged out
+    JsonObject o = arr.add<JsonObject>();
+    char mac[13];
+    snprintf(mac, sizeof(mac), "%02X%02X%02X%02X%02X%02X",
+             peers[i].mac[0], peers[i].mac[1], peers[i].mac[2],
+             peers[i].mac[3], peers[i].mac[4], peers[i].mac[5]);
+    o["mac"] = mac;
+    o["mode"] = constrain(peers[i].mode, 0, 3);
+    o["age"] = now - peers[i].last_seen;
+  }
+  String out; serializeJson(doc, out);
+  srv->send(200, "application/json", out);
+}
+
+static void apiFleetMode() {
+  String macStr = srv->pathArg(0);
+  if (macStr.length() != 12 || !srv->hasArg("v")) { srv->send(400, "text/plain", "Bad Request"); return; }
+  int m = constrain(srv->arg("v").toInt(), 0, 3);
+  uint8_t mac[6];
+  for (int i = 0; i < 6; i++) mac[i] = (uint8_t)strtol(macStr.substring(i*2, i*2+2).c_str(), NULL, 16);
+  send_remote_command(mac, m);
+  srv->send(200, "text/plain", "OK");
+}
+
+// ---------- actions ----------
+// Small mutations: POST /api/action/{name}?v=... Toggles return the new state
+// ("1"/"0") so the SPA confirms rather than guessing — same contract as the
+// old toggle handlers.
+static void apiAction() {
+  String name = srv->pathArg(0);
+  String v = srv->arg("v");
+
+  if (name == "mode") {
+    int m = constrain(v.toInt(), 0, 3);
+    current_mode = (GaugeMode)m;
+    cfg_put_int("mode", m);
+    flag_mode_update = true;
+    srv->send(200, "text/plain", String(m));
+  } else if (name == "bright") {
+    int b = constrain(v.toInt(), 10, 100);
+    current_brightness = b; set_backlight(b);
+    cfg_put_int("bright", b);
+    EspNowPacket pkt = {}; pkt.type = 5; pkt.value = b; broadcast_packet(&pkt);
+    srv->send(200, "text/plain", String(b));
+  } else if (name == "test") {
+    test_mode_enabled = !test_mode_enabled;
+    EspNowPacket pkt = {}; pkt.type = 4; pkt.value = test_mode_enabled?1:0; broadcast_packet(&pkt);
+    srv->send(200, "text/plain", test_mode_enabled ? "1" : "0");
+  } else if (name == "stats") {
+    show_perf_stats = !show_perf_stats;
+    EspNowPacket pkt = {}; pkt.type = 6; pkt.value = show_perf_stats?1:0; broadcast_packet(&pkt);
+    flag_stats_update = true;
+    srv->send(200, "text/plain", show_perf_stats ? "1" : "0");
+  } else if (name == "dbg") {
+    debug_mode_enabled = !debug_mode_enabled;
+    cfg_put_bool("dbg", debug_mode_enabled);
+    srv->send(200, "text/plain", debug_mode_enabled ? "1" : "0");
+  } else if (name == "peak") {
+    peak_hold_enabled = !peak_hold_enabled;
+    if (peak_hold_enabled) { peak_val = -999.0f; peak_low_val = 999.0f; }
+    cfg_put_bool("peak", peak_hold_enabled);
+    srv->send(200, "text/plain", peak_hold_enabled ? "1" : "0");
+  } else if (name == "font") {
+    current_font = (current_font == 0) ? 1 : 0;
+    cfg_put_uint("font", current_font);
+    flag_theme_update = true;
+    srv->send(200, "text/plain", String((int)current_font));
+  } else if (name == "page") {
+    int p = constrain(v.toInt(), 0, 1);
+    current_page = (DisplayPage)p;
+    cfg_put_uint("page", (uint32_t)current_page);
+    flag_page_update = true;
+    srv->send(200, "text/plain", String(p));
+  } else if (name == "sec") {
+    secondary_metric = (uint8_t)constrain(v.toInt(), 0, SECONDARY_COUNT - 1);
+    cfg_put_uint("sm", secondary_metric);
+    srv->send(200, "text/plain", String((int)secondary_metric));
+  } else if (name == "tpsync") {
+    trimpot_theme_sync = !trimpot_theme_sync;
+    cfg_put_bool("tpsync", trimpot_theme_sync);
+    if (trimpot_theme_sync && last_trimpot3 >= 0 && last_trimpot3 < THEME_SLOTS) {
+      active_theme = (uint8_t)last_trimpot3;
+      cfg_put_uint("atheme", active_theme);
+      theme_to_globals(active_theme);
+      flag_theme_update = true;
+    }
+    srv->send(200, "text/plain", trimpot_theme_sync ? "1" : "0");
+  } else if (name == "name") {
+    String n = v; n.trim();
+    if (n.length() > 0 && n.length() <= 20) {
+      device_name = n;
+      cfg_put_string("devname", device_name);
+      srv->send(200, "text/plain", "OK");
+      reboot_at_ms = millis() + 400;  // restart (from loop) to apply new AP SSID
+    } else {
+      srv->send(400, "text/plain", "Name must be 1-20 characters");
+    }
+  } else if (name == "reboot") {
+    srv->send(200, "text/plain", "OK");
+    reboot_at_ms = millis() + 400;
+  } else {
+    srv->send(404, "text/plain", "Unknown action");
+  }
+}
+
+void api_register(WebServer& server) {
+  srv = &server;
+  server.on("/api/state", HTTP_GET, apiState);
+  server.on("/api/themes", HTTP_GET, apiThemesList);
+  server.on(UriBraces("/api/themes/{}"), HTTP_GET, apiThemeGet);
+  server.on(UriBraces("/api/themes/{}"), HTTP_POST, apiThemeSet);
+  server.on(UriBraces("/api/themes/{}/activate"), HTTP_POST, apiThemeActivate);
+  server.on(UriBraces("/api/themes/{}/copy"), HTTP_POST, apiThemeCopy);
+  server.on("/api/fleet", HTTP_GET, apiFleet);
+  server.on(UriBraces("/api/fleet/{}/mode"), HTTP_POST, apiFleetMode);
+  server.on(UriBraces("/api/action/{}"), HTTP_POST, apiAction);
+}

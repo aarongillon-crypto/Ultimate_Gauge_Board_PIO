@@ -9,15 +9,32 @@
 // Bump FIRMWARE_VERSION on each release. FIRMWARE_BUILD is stamped automatically
 // by the compiler every build, so it always changes even if the version is not
 // bumped -- use it to confirm an OTA upload actually took effect.
-#define FIRMWARE_VERSION "1.3.0"
+#define FIRMWARE_VERSION "2.0.0"
+#define FIRMWARE_VER_MAJOR 2
+#define FIRMWARE_VER_MINOR 0
+#define FIRMWARE_VER_PATCH 0
 #define FIRMWARE_BUILD   __DATE__ " " __TIME__
 
 // --- MODES / PAGES ---
 enum GaugeMode { MODE_BOOST=0, MODE_AFR=1, MODE_WATER=2, MODE_OIL=3 };
 enum DisplayPage { PAGE_GAUGE = 0, PAGE_GLOWCRAFT = 1 };
 
-extern const float RANGES[4][2];
 extern const char* MODE_NAMES[4];
+
+// --- GAUGE BEHAVIOR CONFIG (per-mode ranges/zones + dynamics) ---
+// Replaces the hardcoded RANGES table and per-mode colour if-chains. Defaults
+// (BEHAVIOR_DEFAULTS) reproduce the old behavior exactly: a fresh flash over
+// old NVS renders pixel-identically. z1/z2 outside [min,max] = always-mid.
+struct ModeConfig  { float min, max;   // gauge sweep range
+                     float z1, z2; };  // colour zones: v<z1 low, v<z2 mid, else high
+struct BehaviorConfig {
+  ModeConfig mode[4];
+  float smoothing;        // needle smoothing factor (default 0.24)
+  float max_rate;         // max displayed change, units/sec (default 40)
+  uint32_t peak_hold_ms;  // peak reset window (default 30000)
+};
+extern BehaviorConfig behavior;
+extern const BehaviorConfig BEHAVIOR_DEFAULTS;
 
 // --- LIVE CAN DATA ---
 typedef struct {
@@ -39,7 +56,15 @@ struct GaugeTheme {
 #define THEME_SLOTS 4
 
 // --- FLEET ---
-typedef struct { uint8_t mac[6]; int mode; unsigned long last_seen; } PeerGauge;
+typedef struct {
+  uint8_t mac[6];
+  int mode;
+  unsigned long last_seen;
+  uint8_t proto;          // 1 = legacy v1 packets only, 2 = speaks protocol v2
+  uint8_t active_theme;   // v2 presence only
+  uint8_t fw[3];          // v2 presence only: major/minor/patch
+  char name[21];          // v2 presence only ("" for legacy peers)
+} PeerGauge;
 
 // --- CONFIG GLOBALS (owned by loopTask; loaded from NVS at boot) ---
 extern bool test_mode_enabled;
@@ -80,7 +105,6 @@ extern float target_val;
 extern float peak_val;
 extern float peak_low_val;
 extern unsigned long peak_timer;
-extern const unsigned long PEAK_HOLD_TIME;
 
 // --- PERF STATS ---
 extern unsigned long perf_last_time;
@@ -103,3 +127,4 @@ extern volatile bool flag_mode_update;
 extern volatile int32_t pending_mode;
 extern volatile int32_t pending_brightness;
 extern volatile bool snap_displayed;    // snap needle/value to target on next frame
+extern volatile uint32_t identify_end_ms;  // fleet "identify" backlight blink deadline (0 = off)

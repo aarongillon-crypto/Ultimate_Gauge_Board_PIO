@@ -107,9 +107,24 @@
   </div>
 </div>
 
+<div class="card">
+  <h3>Gauge Behavior</h3>
+  <div id="behav"></div>
+  <div class="crow"><label>Smoothing</label><span id="smval">--</span></div>
+  <input type="range" id="smooth" min="5" max="100" oninput="document.getElementById('smval').textContent=(this.value/100).toFixed(2)">
+  <div class="crow"><label>Max rate (units/s)</label><input type="number" id="maxrate" step="1" min="1" style="width:90px"></div>
+  <div class="crow"><label>Peak hold (s)</label><input type="number" id="pkhold" step="1" min="1" max="600" style="width:90px"></div>
+  <button class="primary" onclick="saveConfig()">Save Behavior (syncs to all gauges)</button>
+  <small>Zones: below Z1 = low colour, below Z2 = mid, above = high. Set Z1/Z2 outside the range for a single-colour gauge. Range changes rescale the dial live.</small>
+</div>
+
 <div class="card" id="fleetcard">
   <h3>Remote Gauges</h3>
   <div id="fleet"><small>No peers seen yet.</small></div>
+  <div class="row" style="margin-top:9px">
+    <button onclick="pushThemeTo('ALL')">Push Theme to ALL…</button>
+    <button onclick="post('/api/fleet/ALL/config').then(function(){toast('Config pushed to all')})">Push Config to ALL</button>
+  </div>
 </div>
 
 <div class="card">

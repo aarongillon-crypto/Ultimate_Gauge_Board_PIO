@@ -182,6 +182,57 @@ static void apiThemeCopy() {
   srv->send(200, "text/plain", "OK");
 }
 
+// ---------- behavior config ----------
+static void apiConfigGet() {
+  JsonDocument doc;
+  JsonArray modes = doc["modes"].to<JsonArray>();
+  for (int i = 0; i < 4; i++) {
+    JsonObject m = modes.add<JsonObject>();
+    m["name"] = MODE_NAMES[i];
+    m["min"] = behavior.mode[i].min; m["max"] = behavior.mode[i].max;
+    m["z1"] = behavior.mode[i].z1;   m["z2"] = behavior.mode[i].z2;
+  }
+  doc["smoothing"] = behavior.smoothing;
+  doc["maxRate"] = behavior.max_rate;
+  doc["peakHoldMs"] = behavior.peak_hold_ms;
+  String out; serializeJson(doc, out);
+  srv->send(200, "application/json", out);
+}
+
+// POST /api/config — apply + persist + broadcast CONFIG_SYNC to the fleet.
+// Validation: min<max per mode only; z1/z2 outside the range is legitimate
+// (that's how always-one-colour modes like WATER/OIL are expressed).
+static void apiConfigSet() {
+  String body = srv->arg("plain");
+  if (body.length() == 0 || body.length() > 4096) { srv->send(400, "text/plain", "Bad body"); return; }
+  JsonDocument doc;
+  if (deserializeJson(doc, body) != DeserializationError::Ok) { srv->send(400, "text/plain", "Bad JSON"); return; }
+  JsonArray modes = doc["modes"];
+  if (modes.isNull() || modes.size() != 4) { srv->send(400, "text/plain", "Need 4 modes"); return; }
+
+  BehaviorConfig b = behavior;
+  for (int i = 0; i < 4; i++) {
+    JsonObject m = modes[i];
+    b.mode[i].min = m["min"] | behavior.mode[i].min;
+    b.mode[i].max = m["max"] | behavior.mode[i].max;
+    b.mode[i].z1  = m["z1"]  | behavior.mode[i].z1;
+    b.mode[i].z2  = m["z2"]  | behavior.mode[i].z2;
+    if (!(b.mode[i].min < b.mode[i].max)) { srv->send(400, "text/plain", "min must be < max"); return; }
+  }
+  b.smoothing    = constrain((float)(doc["smoothing"] | behavior.smoothing), 0.02f, 1.0f);
+  b.max_rate     = constrain((float)(doc["maxRate"] | behavior.max_rate), 1.0f, 10000.0f);
+  b.peak_hold_ms = constrain((uint32_t)(doc["peakHoldMs"] | behavior.peak_hold_ms), (uint32_t)1000, (uint32_t)600000);
+
+  bool active_range_changed =
+      b.mode[current_mode].min != behavior.mode[current_mode].min ||
+      b.mode[current_mode].max != behavior.mode[current_mode].max;
+  behavior = b;
+  cfg_persist_behavior(behavior);
+  if (active_range_changed) snap_displayed = true;   // rescale without a cross-dial sweep
+  fleet_push_config(nullptr);                        // broadcast to all peers
+  srv->send(200, "text/plain", "OK");
+}
+
 // ---------- fleet ----------
 static void apiFleet() {
   PeerGauge peers[10];
@@ -199,18 +250,61 @@ static void apiFleet() {
     o["mac"] = mac;
     o["mode"] = constrain(peers[i].mode, 0, 3);
     o["age"] = now - peers[i].last_seen;
+    o["proto"] = peers[i].proto;
+    if (peers[i].proto >= 2) {
+      o["name"] = peers[i].name;
+      char fw[12]; snprintf(fw, sizeof(fw), "%u.%u.%u", peers[i].fw[0], peers[i].fw[1], peers[i].fw[2]);
+      o["fw"] = fw;
+      o["slot"] = peers[i].active_theme;
+    }
   }
   String out; serializeJson(doc, out);
   srv->send(200, "application/json", out);
 }
 
-static void apiFleetMode() {
+// Parse the {mac} path arg: 12 hex chars → mac bytes, or "ALL" → broadcast
+// (returns false for broadcast, true for unicast; bad input sends 400 + throws off).
+static bool parseMacArg(uint8_t mac[6], bool* isAll) {
   String macStr = srv->pathArg(0);
-  if (macStr.length() != 12 || !srv->hasArg("v")) { srv->send(400, "text/plain", "Bad Request"); return; }
-  int m = constrain(srv->arg("v").toInt(), 0, 3);
-  uint8_t mac[6];
+  if (macStr == "ALL") { *isAll = true; return true; }
+  *isAll = false;
+  if (macStr.length() != 12) { srv->send(400, "text/plain", "Bad MAC"); return false; }
   for (int i = 0; i < 6; i++) mac[i] = (uint8_t)strtol(macStr.substring(i*2, i*2+2).c_str(), NULL, 16);
+  return true;
+}
+
+static void apiFleetMode() {
+  uint8_t mac[6]; bool all;
+  if (!parseMacArg(mac, &all)) return;
+  if (all || !srv->hasArg("v")) { srv->send(400, "text/plain", "Bad Request"); return; }
+  int m = constrain(srv->arg("v").toInt(), 0, 3);
   send_remote_command(mac, m);
+  srv->send(200, "text/plain", "OK");
+}
+
+// POST /api/fleet/{mac}/theme?slot=N&activate=0|1 — push a local slot to one
+// peer (or all with mac=ALL). Legacy peers get the v1 fallback automatically.
+static void apiFleetTheme() {
+  uint8_t mac[6]; bool all;
+  if (!parseMacArg(mac, &all)) return;
+  int slot = srv->hasArg("slot") ? srv->arg("slot").toInt() : -1;
+  if (slot < 0 || slot >= THEME_SLOTS) { srv->send(400, "text/plain", "Bad slot"); return; }
+  bool activate = srv->arg("activate") == "1";
+  fleet_push_theme(all ? nullptr : mac, (uint8_t)slot, activate);
+  srv->send(200, "text/plain", "OK");
+}
+
+static void apiFleetConfig() {
+  uint8_t mac[6]; bool all;
+  if (!parseMacArg(mac, &all)) return;
+  fleet_push_config(all ? nullptr : mac);
+  srv->send(200, "text/plain", "OK");
+}
+
+static void apiFleetIdentify() {
+  uint8_t mac[6]; bool all;
+  if (!parseMacArg(mac, &all)) return;
+  fleet_send_identify(all ? nullptr : mac);
   srv->send(200, "text/plain", "OK");
 }
 
@@ -303,7 +397,12 @@ void api_register(WebServer& server) {
   server.on(UriBraces("/api/themes/{}"), HTTP_POST, apiThemeSet);
   server.on(UriBraces("/api/themes/{}/activate"), HTTP_POST, apiThemeActivate);
   server.on(UriBraces("/api/themes/{}/copy"), HTTP_POST, apiThemeCopy);
+  server.on("/api/config", HTTP_GET, apiConfigGet);
+  server.on("/api/config", HTTP_POST, apiConfigSet);
   server.on("/api/fleet", HTTP_GET, apiFleet);
   server.on(UriBraces("/api/fleet/{}/mode"), HTTP_POST, apiFleetMode);
+  server.on(UriBraces("/api/fleet/{}/theme"), HTTP_POST, apiFleetTheme);
+  server.on(UriBraces("/api/fleet/{}/config"), HTTP_POST, apiFleetConfig);
+  server.on(UriBraces("/api/fleet/{}/identify"), HTTP_POST, apiFleetIdentify);
   server.on(UriBraces("/api/action/{}"), HTTP_POST, apiAction);
 }

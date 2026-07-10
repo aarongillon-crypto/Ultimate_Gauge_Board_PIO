@@ -335,7 +335,8 @@ void update_gauge_master() {
     // On a live mode change, jump straight to the new metric instead of sweeping.
     if (snap_displayed) { displayed_val = target_val; snap_displayed = false; }
 
-    // Time-aware smoothing with a per-frame clamp to avoid large jumps
+    // Time-aware smoothing with a per-frame clamp to avoid large jumps.
+    // Dynamics come from the behavior config (web-editable, fleet-syncable).
     static unsigned long last_update_ms = 0;
     unsigned long now_ms = millis();
     float dt = last_update_ms ? (now_ms - last_update_ms) / 1000.0f : (1.0f/30.0f);
@@ -344,10 +345,8 @@ void update_gauge_master() {
     if (fabsf(delta) < 0.05f) {
       displayed_val = target_val;
     } else {
-      const float smoothing = 0.24f; // lower = smoother/slower
-      const float max_rate_per_sec = 40.0f; // units per second maximum change
-      float step = delta * smoothing;
-      float max_step = max_rate_per_sec * dt;
+      float step = delta * behavior.smoothing;      // lower = smoother/slower
+      float max_step = behavior.max_rate * dt;      // units/sec clamp
       if (fabsf(step) > max_step) step = (step > 0) ? max_step : -max_step;
       displayed_val += step;
     }
@@ -355,21 +354,16 @@ void update_gauge_master() {
     if (peak_hold_enabled) {
         if (target_val > peak_val) { peak_val = target_val; peak_timer = millis(); }
         if (target_val < peak_low_val) peak_low_val = target_val;
-        if (millis() - peak_timer > PEAK_HOLD_TIME) { peak_val = target_val; peak_low_val = target_val; }
+        if (millis() - peak_timer > behavior.peak_hold_ms) { peak_val = target_val; peak_low_val = target_val; }
     }
 
-    uint32_t color_hex = color_low;
-    if (current_mode == MODE_BOOST) {
-        if(displayed_val < 0) color_hex = color_low;
-        else if(displayed_val < 20) color_hex = color_mid;
-        else color_hex = color_high;
-    } else if (current_mode == MODE_AFR) {
-        if(displayed_val < 10) color_hex = color_low;
-        else if(displayed_val < 15) color_hex = color_mid;
-        else color_hex = color_high;
-    } else {
-        color_hex = color_mid;
-    }
+    // Generic colour zones from config: v<z1 low, v<z2 mid, else high.
+    // Zones outside [min,max] give always-one-colour (old WATER/OIL behavior).
+    const ModeConfig& mc = behavior.mode[current_mode];
+    uint32_t color_hex;
+    if (displayed_val < mc.z1)      color_hex = color_low;
+    else if (displayed_val < mc.z2) color_hex = color_mid;
+    else                            color_hex = color_high;
 
     int i_part = (int)displayed_val;
     int d_part = abs((int)((displayed_val - i_part) * 10));
@@ -407,8 +401,5 @@ void update_gauge_master() {
       lv_obj_align(val_label_dec, LV_ALIGN_CENTER, ANCHOR_OFS + dec_w / 2, 5);
     }
 
-    float min = RANGES[current_mode][0];
-    float max = RANGES[current_mode][1];
-
-    update_ui(displayed_val, min, max, color_hex, &d);
+    update_ui(displayed_val, mc.min, mc.max, color_hex, &d);
 }

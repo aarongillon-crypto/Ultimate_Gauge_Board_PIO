@@ -30,6 +30,10 @@ String cfg_load_theme_name(uint8_t slot, const char* dflt);
 // Safe-mode: zero the gradient type on the legacy live key AND the slot key.
 void cfg_disable_gradient(uint8_t slot);
 
+// Gauge behavior config (keys m{0-3}_min/max/z1/z2, smooth, maxrate, pkms).
+void cfg_persist_behavior(const BehaviorConfig& b);
+void cfg_load_behavior(BehaviorConfig* out);   // missing keys -> BEHAVIOR_DEFAULTS
+
 // Crash-safe boot flag.
 void cfg_mark_boot_started();  // bootok=false — set before risky rendering
 void cfg_mark_boot_ok();       // bootok=true  — set once rendered + backlit

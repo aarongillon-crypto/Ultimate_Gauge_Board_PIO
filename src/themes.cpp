@@ -111,6 +111,20 @@ void themes_process_pending() {
         theme_to_globals(active_theme);
       }
       break;
+    case PT_FULL_THEME:       // fleet v2 THEME_FULL: store whole slot (+optional activate)
+      if (p.slot < THEME_SLOTS) {
+        themes[p.slot] = p.full;
+        theme_names[p.slot] = String(p.fname);
+        persist_theme(p.slot);
+        cfg_put_theme_name(p.slot, theme_names[p.slot]);
+        if (p.apply) {
+          active_theme = p.slot;
+          cfg_put_uint("atheme", active_theme);
+        }
+        if (p.slot == active_theme) theme_to_globals(active_theme);
+        else return;          // stored a non-active slot — nothing to repaint
+      }
+      break;
     default: return;
   }
   flag_theme_update = true;

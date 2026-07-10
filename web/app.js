@@ -157,21 +157,83 @@ function rename(){
     .catch(function(){ toast('Rename failed', 1); });
 }
 
+// ---------- behavior config ----------
+var BEHAV_FIELDS = ['min', 'max', 'z1', 'z2'];
+function renderConfig(c){
+  var html = '<div class="crow" style="font-size:12px;color:#868d97"><span style="flex:1"></span>'
+    + BEHAV_FIELDS.map(function(f){ return '<span style="width:64px;text-align:center">' + f.toUpperCase() + '</span>'; }).join('') + '</div>';
+  c.modes.forEach(function(m, i){
+    html += '<div class="crow"><label style="flex:1">' + m.name + '</label>'
+      + BEHAV_FIELDS.map(function(f){
+          return '<input type="number" step="any" id="b_' + i + '_' + f + '" value="' + m[f] + '" style="width:64px">';
+        }).join('') + '</div>';
+  });
+  $('behav').innerHTML = html;
+  $('smooth').value = Math.round(c.smoothing * 100);
+  $('smval').textContent = c.smoothing.toFixed(2);
+  $('maxrate').value = c.maxRate;
+  $('pkhold').value = Math.round(c.peakHoldMs / 1000);
+}
+function loadConfig(){ return jget('/api/config').then(renderConfig).catch(function(){}); }
+function saveConfig(){
+  var modes = [];
+  for (var i = 0; i < 4; i++) {
+    var m = {};
+    var bad = false;
+    BEHAV_FIELDS.forEach(function(f){
+      var v = parseFloat($('b_' + i + '_' + f).value);
+      if (isNaN(v)) bad = true;
+      m[f] = v;
+    });
+    if (bad || !(m.min < m.max)) { toast(MN[i] + ': min must be < max', 1); return; }
+    modes.push(m);
+  }
+  var body = {
+    modes: modes,
+    smoothing: (+$('smooth').value) / 100,
+    maxRate: parseFloat($('maxrate').value) || 40,
+    peakHoldMs: (parseInt($('pkhold').value, 10) || 30) * 1000
+  };
+  post('/api/config', body)
+    .then(function(){ toast('Behavior saved + synced'); loadConfig(); })
+    .catch(function(){ toast('Save failed', 1); });
+}
+
 // ---------- fleet ----------
 function renderFleet(f){
   if (!f.peers.length) { $('fleet').innerHTML = '<small>No peers seen yet.</small>'; return; }
   var html = '';
   f.peers.forEach(function(p){
-    var btns = MN.map(function(n, m){
+    var isV2 = p.proto >= 2;
+    var title = isV2 && p.name ? esc(p.name) : 'Gauge ' + p.mac.slice(-6);
+    var sub = 'Mode ' + (MN[p.mode] || '?')
+      + (isV2 ? ' · v' + p.fw + ' · P' + p.slot : ' · <span style="color:#ffb020">legacy</span>');
+    var modeBtns = MN.map(function(n, m){
       return '<button class="sm" onclick="peerMode(\'' + p.mac + '\',' + m + ')">' + n + '</button>';
     }).join('');
-    html += '<div class="slot"><div class="name">Gauge ' + p.mac.slice(-6) + '<small>Mode ' + (MN[p.mode] || '?') + '</small></div>' + btns + '</div>';
+    html += '<div class="slot" style="flex-wrap:wrap">'
+      + '<div class="name" style="min-width:100%">' + title + '<small>' + sub + '</small></div>'
+      + modeBtns
+      + '<button class="sm" onclick="pushThemeTo(\'' + p.mac + '\')">Theme…</button>'
+      + '<button class="sm" onclick="post(\'/api/fleet/' + p.mac + '/config\').then(function(){toast(\'Config sent\')})">Config</button>'
+      + (isV2 ? '<button class="sm" onclick="post(\'/api/fleet/' + p.mac + '/identify\').then(function(){toast(\'Blinking\')})">Identify</button>' : '')
+      + '</div>';
   });
   $('fleet').innerHTML = html;
 }
 function peerMode(mac, m){
   post('/api/fleet/' + mac + '/mode?v=' + m).then(function(){ toast('Sent'); setTimeout(loadFleet, 600); })
     .catch(function(){ toast('Failed', 1); });
+}
+function pushThemeTo(mac){
+  var slot = prompt('Push which local slot? (0-3)' + (mac === 'ALL' ? ' — to ALL gauges' : ''));
+  if (slot === null) return;
+  slot = parseInt(slot, 10);
+  if (isNaN(slot) || slot < 0 || slot > 3) { toast('Bad slot', 1); return; }
+  var activate = confirm('Also ACTIVATE it on the target (OK = activate, Cancel = just store)?');
+  post('/api/fleet/' + mac + '/theme?slot=' + slot + '&activate=' + (activate ? 1 : 0))
+    .then(function(){ toast('Theme pushed'); })
+    .catch(function(){ toast('Push failed', 1); });
 }
 function loadFleet(){ return jget('/api/fleet').then(renderFleet).catch(function(){}); }
 
@@ -181,7 +243,7 @@ function loadFleet(){ return jget('/api/fleet').then(renderFleet).catch(function
   SEC_NAMES.forEach(function(n, i){
     var o = document.createElement('option'); o.value = i; o.textContent = n; sel.appendChild(o);
   });
-  refreshState(); loadThemes(); loadFleet();
+  refreshState(); loadThemes(); loadFleet(); loadConfig();
   setInterval(refreshState, 3000);
   setInterval(loadFleet, 5000);
 })();

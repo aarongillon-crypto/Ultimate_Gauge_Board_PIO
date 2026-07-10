@@ -82,6 +82,7 @@ void setup() {
   snprintf(defaultName, sizeof(defaultName), "Gauge-%04X", (uint16_t)(chipid >> 32));
 
   bool last_boot_completed = cfg_load_all(defaultName);
+  cfg_load_behavior(&behavior);   // per-mode ranges/zones + dynamics (defaults = legacy behavior)
 
   // Build the four theme slots (slot 0 = the legacy theme just loaded above),
   // then make the saved active slot live before the first style pass.
@@ -153,6 +154,26 @@ void loop() {
   // Staged theme changes from other tasks (ESP-NOW colours, trimpot slot switch):
   // applied to globals + slots + NVS here, then flag_theme_update repaints.
   themes_process_pending();
+
+  // Behavior config pushed in via fleet CONFIG_SYNC: apply + persist here.
+  {
+    BehaviorConfig bc;
+    if (fleet_take_pending_config(&bc)) {
+        behavior = bc;
+        cfg_persist_behavior(behavior);
+        snap_displayed = true;   // active range may have changed — snap, don't sweep
+    }
+  }
+
+  // Fleet "identify": blink the backlight until the deadline, then restore.
+  if (identify_end_ms) {
+      if ((int32_t)(millis() - identify_end_ms) >= 0) {
+          identify_end_ms = 0;
+          set_backlight(current_brightness);
+      } else {
+          set_backlight(((millis() / 150) & 1) ? current_brightness : 10);
+      }
+  }
 
   if (flag_theme_update) {
       flag_theme_update = false;

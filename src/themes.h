@@ -27,12 +27,16 @@ enum PendingThemeOp : uint8_t {
   PT_UI_COLORS,        // ESP-NOW type 7: bg/mode-label/link-icon/needle/peak
   PT_GRADIENT,         // ESP-NOW type 8: stops 2/3, stop1, packed type|stops|angle
   PT_ACTIVATE_SLOT,    // trimpot: make slot N live (not persisted — matches rotary semantics)
+  PT_FULL_THEME,       // fleet v2 THEME_FULL: whole slot incl. name, optional activate
 };
 typedef struct {
   PendingThemeOp op;
-  uint8_t slot;                     // PT_ACTIVATE_SLOT
+  uint8_t slot;                     // PT_ACTIVATE_SLOT / PT_FULL_THEME target
   uint32_t c1, c2, c3, c4, c5;      // colour payloads
   uint8_t gt, gs; uint16_t ga;      // gradient payloads
+  GaugeTheme full;                  // PT_FULL_THEME payload
+  char fname[21];                   // PT_FULL_THEME slot name
+  uint8_t apply;                    // PT_FULL_THEME: 1 = also activate the slot
 } PendingTheme;
 
 // Stage a theme change from ANY task (single-slot; the latest write wins).

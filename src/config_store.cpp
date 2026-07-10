@@ -95,6 +95,43 @@ void cfg_disable_gradient(uint8_t slot) {
   preferences.end();
 }
 
+// Behavior keys: m{mode}_{field}, e.g. "m2_z1" (well under the 15-char limit).
+static void behavior_key(char* buf, uint8_t mode, const char* field) {
+  snprintf(buf, 10, "m%u_%s", mode, field);
+}
+
+void cfg_persist_behavior(const BehaviorConfig& b) {
+  guard_task();
+  char k[10];
+  preferences.begin("gauge", false);
+  for (uint8_t i = 0; i < 4; i++) {
+    behavior_key(k,i,"min"); preferences.putFloat(k, b.mode[i].min);
+    behavior_key(k,i,"max"); preferences.putFloat(k, b.mode[i].max);
+    behavior_key(k,i,"z1");  preferences.putFloat(k, b.mode[i].z1);
+    behavior_key(k,i,"z2");  preferences.putFloat(k, b.mode[i].z2);
+  }
+  preferences.putFloat("smooth", b.smoothing);
+  preferences.putFloat("maxrate", b.max_rate);
+  preferences.putUInt("pkms", b.peak_hold_ms);
+  preferences.end();
+}
+
+void cfg_load_behavior(BehaviorConfig* out) {
+  char k[10];
+  const BehaviorConfig& d = BEHAVIOR_DEFAULTS;
+  preferences.begin("gauge", true);
+  for (uint8_t i = 0; i < 4; i++) {
+    behavior_key(k,i,"min"); out->mode[i].min = preferences.getFloat(k, d.mode[i].min);
+    behavior_key(k,i,"max"); out->mode[i].max = preferences.getFloat(k, d.mode[i].max);
+    behavior_key(k,i,"z1");  out->mode[i].z1  = preferences.getFloat(k, d.mode[i].z1);
+    behavior_key(k,i,"z2");  out->mode[i].z2  = preferences.getFloat(k, d.mode[i].z2);
+  }
+  out->smoothing    = preferences.getFloat("smooth", d.smoothing);
+  out->max_rate     = preferences.getFloat("maxrate", d.max_rate);
+  out->peak_hold_ms = preferences.getUInt("pkms", d.peak_hold_ms);
+  preferences.end();
+}
+
 void cfg_mark_boot_started() { guard_task(); preferences.begin("gauge", false); preferences.putBool("bootok", false); preferences.end(); }
 void cfg_mark_boot_ok()      { guard_task(); preferences.begin("gauge", false); preferences.putBool("bootok", true);  preferences.end(); }
 

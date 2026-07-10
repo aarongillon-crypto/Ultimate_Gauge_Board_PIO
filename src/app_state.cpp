@@ -1,8 +1,20 @@
 // Definitions for the shared globals declared in app_state.h.
 #include "app_state.h"
 
-const float RANGES[4][2] = { {-15,30}, {8,22}, {0,120}, {0,100} };
 const char* MODE_NAMES[4] = { "BOOST", "AFR", "WATER", "OIL P" };
+
+// Defaults reproduce the pre-config behavior EXACTLY (old RANGES table +
+// hardcoded zone thresholds; WATER/OIL were always-mid → zones out of range).
+const BehaviorConfig BEHAVIOR_DEFAULTS = {
+  { { -15, 30,      0,   20   },     // BOOST: <0 low, <20 mid, else high
+    {   8, 22,     10,   15   },     // AFR:   <10 low, <15 mid, else high
+    {   0, 120, -9999, 9999   },     // WATER: always mid
+    {   0, 100, -9999, 9999   } },   // OIL P: always mid
+  0.24f,   // smoothing
+  40.0f,   // max_rate units/sec
+  30000    // peak_hold_ms
+};
+BehaviorConfig behavior = BEHAVIOR_DEFAULTS;
 
 bool test_mode_enabled = false;
 bool show_perf_stats = false;
@@ -44,7 +56,6 @@ float target_val = 0.0;
 float peak_val = -999.0;
 float peak_low_val = 999.0;
 unsigned long peak_timer = 0;
-const unsigned long PEAK_HOLD_TIME = 30000;
 
 unsigned long perf_last_time = 0;
 int perf_frames = 0;
@@ -62,3 +73,4 @@ volatile bool flag_mode_update = false;
 volatile int32_t pending_mode = -1;
 volatile int32_t pending_brightness = -1;
 volatile bool snap_displayed = false;
+volatile uint32_t identify_end_ms = 0;

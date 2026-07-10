@@ -69,18 +69,20 @@
 
 #if LV_USE_STDLIB_MALLOC == LV_STDLIB_BUILTIN
     /** Size of memory available for `lv_malloc()` in bytes (>= 2kB) */
-    #define LV_MEM_SIZE (96 * 1024U)          /**< [bytes] - 96K: complex gradients (radial/conical) allocate a gradient map from this pool while the big DSEG14 glyph caches fragment it; 64K exhausted -> lv_malloc NULL -> renderer crash. BLE removed so internal-RAM headroom is available */
+    #define LV_MEM_SIZE (96 * 1024U)          /**< [bytes] - 96K: complex gradients (radial/conical) allocate a gradient map from this pool while the big DSEG14 glyph caches fragment it; smaller pools exhaust -> lv_malloc NULL -> renderer crash */
 
     /** Size of the memory expand for `lv_malloc()` in bytes */
     #define LV_MEM_POOL_EXPAND_SIZE 0
 
     /** Set an address for the memory pool instead of allocating it as a normal array. Can be in external SRAM too. */
     #define LV_MEM_ADR 0     /**< 0: unused*/
-    /* Instead of an address give a memory allocator that will be called to get a memory pool for LVGL. E.g. my_malloc */
-    #if LV_MEM_ADR == 0
-        #undef LV_MEM_POOL_INCLUDE
-        #undef LV_MEM_POOL_ALLOC
-    #endif
+    /* Pool is allocated from PSRAM (8MB on this board). A 96K pool as a static
+     * internal-DRAM array starved WiFi AP+STA init of heap -> softAP failures /
+     * intermittent boot loops (found on-car, v1.1.0). Draw buffers stay in
+     * internal DMA SRAM (LVGL_Driver) — only LVGL's object/glyph/gradient pool
+     * lives in PSRAM. Verify after building: RAM% should NOT include the pool. */
+    #define LV_MEM_POOL_INCLUDE <esp_heap_caps.h>
+    #define LV_MEM_POOL_ALLOC(size) heap_caps_malloc(size, MALLOC_CAP_SPIRAM)
 #endif  /*LV_USE_STDLIB_MALLOC == LV_STDLIB_BUILTIN*/
 
 /*====================

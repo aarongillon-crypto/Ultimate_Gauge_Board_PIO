@@ -22,7 +22,7 @@
 // Bump FIRMWARE_VERSION on each release. FIRMWARE_BUILD is stamped automatically
 // by the compiler every build, so it always changes even if the version is not
 // bumped -- use it to confirm an OTA upload actually took effect.
-#define FIRMWARE_VERSION "1.1.0"
+#define FIRMWARE_VERSION "1.1.1"
 #define FIRMWARE_BUILD   __DATE__ " " __TIME__
 
 // --- CONFIGURATION ---
@@ -913,7 +913,9 @@ void setup_wifi() {
 
   char ssid[32];
   snprintf(ssid, sizeof(ssid), "Haltech-%s", device_name.c_str());
-  WiFi.softAP(ssid, NULL, WIFI_CHANNEL);
+  if (!WiFi.softAP(ssid, NULL, WIFI_CHANNEL)) {
+    Serial.println("[WIFI] softAP FAILED (out of internal heap?) — web/OTA unreachable");
+  }
 
   // Reduce WiFi power to minimize RF interference with display PSRAM bus
   esp_wifi_set_max_tx_power(34); // Reduce to ~8.5dBm to minimise PSRAM bus contention during TX bursts
@@ -923,9 +925,9 @@ void setup_wifi() {
   WiFi.macAddress(my_sta_mac);
   WiFi.softAPmacAddress(my_ap_mac);
 
-  if (esp_now_init() != ESP_OK) return;
-  esp_now_register_recv_cb(OnDataRecv);
-  
+  // Web server + OTA are the recovery path — bring them up BEFORE ESP-NOW so a
+  // fleet-sync init failure can never take down the ability to re-flash.
+  // (Previously `if (esp_now_init() != ESP_OK) return;` skipped server.begin().)
   server.on("/", handleRoot);
   server.on("/theme", handleTheme); server.on("/set", handleSet); server.on("/rem", handleRemote); server.on("/name", handleName);
   server.on("/bright", handleBright); server.on("/test", handleTest); server.on("/stats", handleStats); server.on("/debug", handleDebug);
@@ -945,6 +947,13 @@ void setup_wifi() {
   ArduinoOTA.onEnd([]()    { Serial.println("[OTA] ArduinoOTA done"); });
   ArduinoOTA.onError([](ota_error_t e) { Serial.printf("[OTA] Error %u\n", e); });
   ArduinoOTA.begin();
+
+  // ESP-NOW last — fleet sync is optional; web/OTA above must survive its failure.
+  if (esp_now_init() == ESP_OK) {
+    esp_now_register_recv_cb(OnDataRecv);
+  } else {
+    Serial.println("[ESPNOW] init FAILED — fleet sync disabled this boot");
+  }
 }
 
 // --- UI ---
@@ -1658,6 +1667,14 @@ void setup() {
   preferences.begin("gauge", false);
   preferences.putBool("bootok", true);
   preferences.end();
+
+  // Post-setup memory diagnostics — internal heap is the scarce resource
+  // (WiFi + LVGL draw buffers + lwip all draw on it). Watch this on bench.
+  Serial.printf("[BOOT] Setup complete. Internal heap: %u free (min ever %u, largest block %u). PSRAM: %u free\n",
+                heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
+                heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL),
+                heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL),
+                ESP.getFreePsram());
 }
 
 void loop() {

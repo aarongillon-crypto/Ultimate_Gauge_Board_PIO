@@ -6,6 +6,10 @@ void canbus_init(void) {
 
   // Configure TWAI (CAN)
     twai_general_config_t g_config = TWAI_GENERAL_CONFIG_DEFAULT(CAN_TX_GPIO, CAN_RX_GPIO, TWAI_MODE_NORMAL);
+    // Default rx_queue_len is 5 — far too shallow for a busy 1 Mbit Haltech bus.
+    // Bursts overflowed it and silently dropped frames, including low-rate ones
+    // like Rotary Trim 3 (0x3E4, 5 Hz) that drive theme-sync. Deepen the queue.
+    g_config.rx_queue_len = 32;
     twai_timing_config_t t_config = TWAI_TIMING_CONFIG_1MBITS();
     twai_filter_config_t f_config = TWAI_FILTER_CONFIG_ACCEPT_ALL();  // Accept all IDs
  

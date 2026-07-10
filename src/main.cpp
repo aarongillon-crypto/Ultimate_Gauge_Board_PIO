@@ -163,6 +163,7 @@ volatile bool flag_bright_update = false;
 volatile bool flag_stats_update = false;
 volatile bool flag_page_update = false;
 volatile bool flag_mode_update = false;   // apply a live gauge-mode change (no restart)
+volatile bool flag_persist_theme = false; // persist the live theme to NVS from loop() — deferred out of the ESP-NOW recv callback, where blocking flash writes crash the Wi-Fi task
 volatile bool snap_displayed = false;      // snap needle/value to target on next frame
 
 #define WIFI_CHANNEL 1
@@ -250,14 +251,12 @@ void OnDataRecv(const esp_now_recv_info_t * info, const uint8_t *incomingData, i
     preferences.begin("gauge", false); preferences.putInt("mode", (int)current_mode); preferences.end();
     flag_mode_update = true;
   }
-  else if (pkt->type == 3) { 
+  else if (pkt->type == 3) {
     text_color = pkt->c1; color_low = pkt->c2; color_mid = pkt->c3; color_high = pkt->c4;
-    preferences.begin("gauge", false);
-    preferences.putUInt("ct", text_color); preferences.putUInt("cl", color_low);
-    preferences.putUInt("cm", color_mid); preferences.putUInt("ch", color_high);
-    preferences.end();
-    flag_theme_update = true;
-    globals_to_theme(active_theme); persist_theme(active_theme);
+    // Set globals only. The NVS writes + slot capture are deferred to loop() via
+    // flag_persist_theme — doing blocking flash writes here (Wi-Fi task context)
+    // crashes/hangs the receiver, so a broadcast "Apply to ALL" never landed.
+    flag_theme_update = true; flag_persist_theme = true;
   }
   else if (pkt->type == 4) {
     test_mode_enabled = (pkt->value == 1);
@@ -271,26 +270,18 @@ void OnDataRecv(const esp_now_recv_info_t * info, const uint8_t *incomingData, i
     show_perf_stats = (pkt->value == 1);
     flag_stats_update = true;
   }
-  else if (pkt->type == 7) { 
-    // UI Colors broadcast
+  else if (pkt->type == 7) {
+    // UI Colors broadcast. Globals only — persistence deferred to loop() (see type 3).
     color_background = pkt->c1;
     color_mode_label = pkt->c2;
     color_link_icon = pkt->c3;
     needle_color = pkt->c4;
     color_peak = (uint32_t)pkt->value;
-    preferences.begin("gauge", false);
-    preferences.putUInt("cbg", color_background);
-    preferences.putUInt("cml", color_mode_label);
-    preferences.putUInt("cli", color_link_icon);
-    preferences.putUInt("cn", needle_color);
-    preferences.putUInt("cp", color_peak);
-    preferences.end();
-    flag_theme_update = true;
-    globals_to_theme(active_theme); persist_theme(active_theme);
+    flag_theme_update = true; flag_persist_theme = true;
   }
   else if (pkt->type == 8) {
     // Background gradient broadcast: c1/c2 = stops 2/3, c3 = background (stop 1),
-    // value packs type|stops|angle (see handleGrad).
+    // value packs type|stops|angle (see handleGrad). Persistence deferred to loop().
     color_background2 = pkt->c1;
     color_background3 = pkt->c2;
     color_background  = pkt->c3;
@@ -298,16 +289,7 @@ void OnDataRecv(const esp_now_recv_info_t * info, const uint8_t *incomingData, i
     bg_grad_type  = (uint8_t)(v & 0x0F);
     bg_grad_stops = (uint8_t)((v >> 4) & 0x0F);
     bg_grad_angle = (uint16_t)((v >> 8) & 0xFFFF);
-    preferences.begin("gauge", false);
-    preferences.putUInt("cbg", color_background);
-    preferences.putUInt("cbg2", color_background2);
-    preferences.putUInt("cbg3", color_background3);
-    preferences.putUChar("cgt", bg_grad_type);
-    preferences.putUChar("cgs", bg_grad_stops);
-    preferences.putUShort("cga", bg_grad_angle);
-    preferences.end();
-    flag_theme_update = true;
-    globals_to_theme(active_theme); persist_theme(active_theme);
+    flag_theme_update = true; flag_persist_theme = true;
   }
 
 }
@@ -1010,8 +992,11 @@ void apply_background(lv_obj_t *scr) {
         }
         case 4:  // radial: centre -> right edge (radius 240)
             lv_grad_radial_init(&bg_grad_dsc, LV_GRAD_CENTER, LV_GRAD_CENTER, LV_GRAD_RIGHT, LV_GRAD_CENTER, LV_GRAD_EXTEND_PAD); break;
-        case 5:  // conical sweep from bg_grad_angle
-            lv_grad_conical_init(&bg_grad_dsc, LV_GRAD_CENTER, LV_GRAD_CENTER, bg_grad_angle, bg_grad_angle + 359, LV_GRAD_EXTEND_PAD); break;
+        case 5: {  // conical sweep starting at bg_grad_angle (keep angles in 0..360)
+            int16_t a0 = (int16_t)(bg_grad_angle % 360);
+            lv_grad_conical_init(&bg_grad_dsc, LV_GRAD_CENTER, LV_GRAD_CENTER, a0, a0 + 359, LV_GRAD_EXTEND_PAD);
+            break;
+        }
         default:
             lv_obj_set_style_bg_grad(scr, NULL, 0); return;
     }
@@ -1542,18 +1527,30 @@ void receive_can_task(void *arg) {
   static unsigned long last_recover_ms = 0;
   while (1) {
     twai_message_t message;
-    esp_err_t err = twai_receive(&message, pdMS_TO_TICKS(5));
-    if (err == ESP_OK) {
-      xQueueSend(canMsgQueue, &message, 0);
-    } else if (err != ESP_ERR_TIMEOUT) {
-      // Only attempt recovery on actual bus errors, rate-limited to once per 5s
-      unsigned long now = millis();
-      if (now - last_recover_ms > 5000) {
-        last_recover_ms = now;
-        canbus_recover();
+    // Non-blocking drain of everything the TWAI RX queue currently holds, bounded
+    // so a flooded bus can't starve the same-core LVGL loop. Previously we pulled
+    // a single frame per 1 ms tick, so bursts overflowed the (shallow) hardware RX
+    // queue and dropped frames — including 5 Hz ones like Rotary Trim 3 (0x3E4),
+    // which made theme-sync miss knob changes.
+    int drained = 0;
+    while (drained < 24) {
+      esp_err_t err = twai_receive(&message, 0);
+      if (err == ESP_OK) {
+        xQueueSend(canMsgQueue, &message, 0);
+        drained++;
+        continue;
       }
+      if (err != ESP_ERR_TIMEOUT) {
+        // Actual bus error (not just an empty queue) — recover, rate-limited to 5s.
+        unsigned long now = millis();
+        if (now - last_recover_ms > 5000) {
+          last_recover_ms = now;
+          canbus_recover();
+        }
+      }
+      break;  // queue drained (TIMEOUT) or bus error — done for this tick
     }
-    vTaskDelay(pdMS_TO_TICKS(1));
+    vTaskDelay(pdMS_TO_TICKS(1));  // yield to the LVGL loop (same core, lower prio)
   }
 }
 
@@ -1678,6 +1675,12 @@ void loop() {
   if (flag_theme_update) {
       flag_theme_update = false;
       apply_theme_colors();   // in-place colour/gradient/font update (no teardown)
+  }
+  if (flag_persist_theme) {
+      // A theme pushed in via ESP-NOW ("Apply to ALL"): fold it into the active
+      // slot and write to NVS here, in loop context, not in the recv callback.
+      flag_persist_theme = false;
+      globals_to_theme(active_theme); persist_theme(active_theme);
   }
   if (flag_bright_update) {
       flag_bright_update = false;

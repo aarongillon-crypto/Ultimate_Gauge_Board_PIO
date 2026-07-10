@@ -69,7 +69,7 @@
 
 #if LV_USE_STDLIB_MALLOC == LV_STDLIB_BUILTIN
     /** Size of memory available for `lv_malloc()` in bytes (>= 2kB) */
-    #define LV_MEM_SIZE (64 * 1024U)          /**< [bytes] - 64K: complex gradients are heap-heavy; BLE removed so headroom is available */
+    #define LV_MEM_SIZE (96 * 1024U)          /**< [bytes] - 96K: complex gradients (radial/conical) allocate a gradient map from this pool while the big DSEG14 glyph caches fragment it; 64K exhausted -> lv_malloc NULL -> renderer crash. BLE removed so internal-RAM headroom is available */
 
     /** Size of the memory expand for `lv_malloc()` in bytes */
     #define LV_MEM_POOL_EXPAND_SIZE 0

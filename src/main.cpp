@@ -22,7 +22,7 @@
 // Bump FIRMWARE_VERSION on each release. FIRMWARE_BUILD is stamped automatically
 // by the compiler every build, so it always changes even if the version is not
 // bumped -- use it to confirm an OTA upload actually took effect.
-#define FIRMWARE_VERSION "1.1.1"
+#define FIRMWARE_VERSION "1.1.2"
 #define FIRMWARE_BUILD   __DATE__ " " __TIME__
 
 // --- CONFIGURATION ---
@@ -1660,6 +1660,16 @@ void setup() {
   // contains valid content before it's visible, preventing startup corruption.
   // Pump OTA/web here too so recovery stays possible even if a render stalls.
   for (int i = 0; i < 5; i++) { lv_timer_handler(); ArduinoOTA.handle(); server.handleClient(); }
+
+  // Backlight soft-start: ramp instead of stepping straight to target. A 0->max
+  // jump makes the LED boost converter draw a hard inrush right as WiFi beacons
+  // + PSRAM render traffic peak — measured brownouts on bench/USB supplies at
+  // exactly this moment. ~300ms ramp keeps the rail alive; frames keep pumping.
+  for (int b = 5; b < current_brightness; b += 5) {
+    set_backlight(b);
+    lv_timer_handler();
+    vTaskDelay(pdMS_TO_TICKS(15));
+  }
   set_backlight(current_brightness);
 
   // Boot fully succeeded (rendered + backlit) — clear the in-progress flag so the

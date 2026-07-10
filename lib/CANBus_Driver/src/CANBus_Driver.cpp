@@ -2,9 +2,14 @@
 #include "CANBus_Driver.h"
 #include <stdio.h>
 
-void canbus_init(void) {
+// True once the TWAI driver is installed and started. A failed init no longer
+// hangs boot (the old code did `while(1);`, bricking display/web/OTA until a
+// power cycle) — the gauge comes up CAN-less and canbus_recover() retries.
+bool canbus_ok = false;
 
-  // Configure TWAI (CAN)
+// Full (re)install attempt — used at boot and again from canbus_recover()
+// if the driver never came up (e.g. transceiver fault at key-on).
+static bool canbus_try_install(void) {
     twai_general_config_t g_config = TWAI_GENERAL_CONFIG_DEFAULT(CAN_TX_GPIO, CAN_RX_GPIO, TWAI_MODE_NORMAL);
     // Default rx_queue_len is 5 — far too shallow for a busy 1 Mbit Haltech bus.
     // Bursts overflowed it and silently dropped frames, including low-rate ones
@@ -12,24 +17,31 @@ void canbus_init(void) {
     g_config.rx_queue_len = 32;
     twai_timing_config_t t_config = TWAI_TIMING_CONFIG_1MBITS();
     twai_filter_config_t f_config = TWAI_FILTER_CONFIG_ACCEPT_ALL();  // Accept all IDs
- 
-    // Install and start TWAI driver
-    if (twai_driver_install(&g_config, &t_config, &f_config) == ESP_OK) {
-        Serial.println("TWAI driver installed.");
-    } else {
-        Serial.println("Failed to install TWAI driver.");
-        while (1);
-    }
 
-    if (twai_start() == ESP_OK) {
+    if (twai_driver_install(&g_config, &t_config, &f_config) != ESP_OK) return false;
+    if (twai_start() != ESP_OK) {
+        twai_driver_uninstall();
+        return false;
+    }
+    return true;
+}
+
+void canbus_init(void) {
+    canbus_ok = canbus_try_install();
+    if (canbus_ok) {
         Serial.println("TWAI driver started. Listening for messages...");
     } else {
-        Serial.println("Failed to start TWAI driver.");
-        while (1);
+        Serial.println("TWAI init FAILED — CAN disabled; display/web/OTA stay up, will retry.");
     }
 }
 
 void canbus_recover(void) {
+    if (!canbus_ok) {
+        // Driver never came up — retry a full install (caller rate-limits to 5s).
+        canbus_ok = canbus_try_install();
+        if (canbus_ok) Serial.println("TWAI recovered (late install).");
+        return;
+    }
     twai_status_info_t status;
     if (twai_get_status_info(&status) == ESP_OK) {
         if (status.state == TWAI_STATE_BUS_OFF) {

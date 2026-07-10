@@ -8,3 +8,7 @@
 
 void canbus_init();
 void canbus_recover();
+
+// False if the TWAI driver failed to install/start (dead transceiver, etc.).
+// The gauge keeps running without CAN; canbus_recover() retries the install.
+extern bool canbus_ok;

@@ -22,7 +22,7 @@
 // Bump FIRMWARE_VERSION on each release. FIRMWARE_BUILD is stamped automatically
 // by the compiler every build, so it always changes even if the version is not
 // bumped -- use it to confirm an OTA upload actually took effect.
-#define FIRMWARE_VERSION "1.0.2"
+#define FIRMWARE_VERSION "1.1.0"
 #define FIRMWARE_BUILD   __DATE__ " " __TIME__
 
 // --- CONFIGURATION ---
@@ -50,7 +50,6 @@ static const char* reset_reason_str(esp_reset_reason_t r) {
 
 enum GaugeMode { MODE_BOOST=0, MODE_AFR=1, MODE_WATER=2, MODE_OIL=3 };
 
-LV_FONT_DECLARE(dseg14_60);
 LV_FONT_DECLARE(dseg14_96);
 LV_FONT_DECLARE(dseg14_120);
 
@@ -59,7 +58,6 @@ LV_FONT_DECLARE(dseg14_120);
 LV_FONT_DECLARE(firamono_96);
 LV_FONT_DECLARE(firamono_120);
 #endif
-// LV_IMG_DECLARE(gauge_bg);
 
 QueueHandle_t canMsgQueue;
 #define CAN_QUEUE_LENGTH 32
@@ -77,7 +75,7 @@ Preferences preferences;
 WebServer server(80);
 GaugeMode current_mode = MODE_BOOST; 
 
-String device_name = "Gauge";  // loaded from NVS, used for AP SSID and BLE name
+String device_name = "Gauge";  // loaded from NVS, used for AP SSID
 uint32_t text_color = 0xFFD700;
 uint32_t color_low = 0x2196F3, color_mid = 0x4CAF50, color_high = 0xF44336;
 uint32_t color_mode_label = 0x969696; // Mode label (gray)
@@ -157,13 +155,24 @@ int perf_frame_ms = 0;
 int perf_lvgl_ms = 0;
 
 volatile bool flag_new_peer = false;
-volatile bool flag_reboot = false;
+// Deferred reboot deadline (0 = none). Handlers set this instead of calling
+// delay()+ESP.restart() inline, so the HTTP response actually flushes and the
+// LVGL loop is never blocked waiting on a reboot.
+volatile uint32_t reboot_at_ms = 0;
 volatile bool flag_theme_update = false; 
 volatile bool flag_bright_update = false;
 volatile bool flag_stats_update = false;
 volatile bool flag_page_update = false;
 volatile bool flag_mode_update = false;   // apply a live gauge-mode change (no restart)
 volatile bool flag_persist_theme = false; // persist the live theme to NVS from loop() — deferred out of the ESP-NOW recv callback, where blocking flash writes crash the Wi-Fi task
+// Remote mode/brightness arrive in the ESP-NOW callback but are applied AND
+// persisted from loop() (-1 = nothing pending) — same no-NVS-in-callback rule.
+volatile int32_t pending_mode = -1;
+volatile int32_t pending_brightness = -1;
+// Own MACs, cached once in setup_wifi() so the recv callback doesn't call into
+// the WiFi driver per packet just to filter its own echoes.
+static uint8_t my_sta_mac[6] = {0};
+static uint8_t my_ap_mac[6]  = {0};
 volatile bool snap_displayed = false;      // snap needle/value to target on next frame
 
 #define WIFI_CHANNEL 1
@@ -176,8 +185,18 @@ typedef struct __attribute__((packed)) {
 
 typedef struct { uint8_t mac[6]; int mode; unsigned long last_seen; } PeerGauge;
 PeerGauge fleet[10]; int fleet_count = 0;
+// fleet[] is written from the ESP-NOW callback (WiFi task, core 0) and read by
+// web handlers in loop() — guard both sides with a short critical section.
+static portMUX_TYPE fleet_mux = portMUX_INITIALIZER_UNLOCKED;
+// Copy out a consistent view of the fleet for readers (returns entry count).
+int fleet_snapshot(PeerGauge *out, int max_entries) {
+  taskENTER_CRITICAL(&fleet_mux);
+  int n = (fleet_count < max_entries) ? fleet_count : max_entries;
+  memcpy(out, fleet, n * sizeof(PeerGauge));
+  taskEXIT_CRITICAL(&fleet_mux);
+  return n;
+}
 
-lv_obj_t *main_scr;
 lv_obj_t *val_label_int;
 lv_obj_t *val_label_dec;
 lv_obj_t *mode_label;
@@ -198,20 +217,17 @@ lv_obj_t *glowcraft_scr = nullptr;  // holds the LED silhouette view
 const float RANGES[4][2] = { {-15,30}, {8,22}, {0,120}, {0,100} };
 const char* MODE_NAMES[4] = { "BOOST", "AFR", "WATER", "OIL P" };
 
-bool receiving_data = false;
-volatile bool data_ready = false;
-
 void drivers_init() {
   i2c_init(); tca9554pwr_init(0x00); lcd_init(); canbus_init(); glowcraft_init(); lvgl_init();
 }
 
-void log_msg(String msg) { Serial.println(msg); }
-
 void update_peer_list(const uint8_t *mac, int mode) {
+  bool added = false;
+  taskENTER_CRITICAL(&fleet_mux);
   bool found = false;
   for (int i = 0; i < fleet_count; i++) {
     if (memcmp(fleet[i].mac, mac, 6) == 0) {
-      fleet[i].mode = mode; fleet[i].last_seen = millis(); 
+      fleet[i].mode = mode; fleet[i].last_seen = millis();
       found = true; break;
     }
   }
@@ -219,36 +235,35 @@ void update_peer_list(const uint8_t *mac, int mode) {
     memcpy(fleet[fleet_count].mac, mac, 6);
     fleet[fleet_count].mode = mode; fleet[fleet_count].last_seen = millis();
     fleet_count++;
-    flag_new_peer = true; 
+    added = true;
   }
+  taskEXIT_CRITICAL(&fleet_mux);
+  if (added) flag_new_peer = true;
 }
 
 void OnDataRecv(const esp_now_recv_info_t * info, const uint8_t *incomingData, int len) {
   const uint8_t* mac = info->src_addr;
   if (len != sizeof(EspNowPacket)) return;
 
-  // Ignore our own packets echoed back via the AP interface (check both STA and AP MACs)
-  uint8_t myStaMac[6], myApMac[6];
-  WiFi.macAddress(myStaMac);
-  WiFi.softAPmacAddress(myApMac);
-  if (memcmp(mac, myStaMac, 6) == 0 || memcmp(mac, myApMac, 6) == 0) return;
+  // Ignore our own packets echoed back via the AP interface (MACs cached at setup)
+  if (memcmp(mac, my_sta_mac, 6) == 0 || memcmp(mac, my_ap_mac, 6) == 0) return;
 
   EspNowPacket *pkt = (EspNowPacket *)incomingData;
 
-  Serial.printf("[ESP-NOW] type=%d mode=%d from %02X:%02X:%02X:%02X:%02X:%02X to %02X:%02X:%02X:%02X:%02X:%02X\n",
-    pkt->type, pkt->mode,
-    mac[0], mac[1], mac[2], mac[3], mac[4], mac[5],
-    info->des_addr[0], info->des_addr[1], info->des_addr[2],
-    info->des_addr[3], info->des_addr[4], info->des_addr[5]);
+  if (debug_mode_enabled) {
+    Serial.printf("[ESP-NOW] type=%d mode=%d from %02X:%02X:%02X:%02X:%02X:%02X to %02X:%02X:%02X:%02X:%02X:%02X\n",
+      pkt->type, pkt->mode,
+      mac[0], mac[1], mac[2], mac[3], mac[4], mac[5],
+      info->des_addr[0], info->des_addr[1], info->des_addr[2],
+      info->des_addr[3], info->des_addr[4], info->des_addr[5]);
+  }
 
   if (pkt->type == 1) {
     update_peer_list(mac, pkt->mode);
   }
   else if (pkt->type == 2) {
-    // Remote mode change — apply live (no reboot). LVGL work is deferred to
-    // loop() via flag_mode_update since this runs in the ESP-NOW callback context.
-    current_mode = (GaugeMode)constrain(pkt->mode, 0, 3);
-    preferences.begin("gauge", false); preferences.putInt("mode", (int)current_mode); preferences.end();
+    // Remote mode change — applied AND persisted from loop() (no NVS here).
+    pending_mode = constrain(pkt->mode, 0, 3);
     flag_mode_update = true;
   }
   else if (pkt->type == 3) {
@@ -261,9 +276,9 @@ void OnDataRecv(const esp_now_recv_info_t * info, const uint8_t *incomingData, i
   else if (pkt->type == 4) {
     test_mode_enabled = (pkt->value == 1);
   }
-  else if (pkt->type == 5) { 
-    current_brightness = pkt->value;
-    preferences.begin("gauge", false); preferences.putInt("bright", current_brightness); preferences.end();
+  else if (pkt->type == 5) {
+    // Remote brightness — applied AND persisted from loop() (no NVS here).
+    pending_brightness = constrain(pkt->value, 10, 100);
     flag_bright_update = true;
   }
   else if (pkt->type == 6) { 
@@ -329,10 +344,6 @@ String colorToHex(uint32_t color) {
 uint32_t hexToColor(String hex) {
   hex.replace("#", ""); return strtoul(hex.c_str(), NULL, 16);
 }
-String macToString(uint8_t *mac) {
-  char buf[18]; snprintf(buf, sizeof(buf), "%02X:%02X:%02X:%02X:%02X:%02X", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]); return String(buf);
-}
-
 // --- THEME SLOTS ---
 // Copy a stored slot into the live colour globals (used by the renderer).
 void theme_to_globals(uint8_t i) {
@@ -516,15 +527,19 @@ void handleRoot() {
   html += "<button class='m" + String(current_mode==3?" active":"") + "' onclick=\"setMode(3,this)\">Oil</button>";
   html += "</div></div>";
   
-  if (fleet_count > 0) {
-    html += "<span class='lbl'>Remote Gauges</span>";
-    for(int i=0; i<fleet_count; i++) {
-        if (millis() - fleet[i].last_seen < 10000) {
-            String macStr = "";
-            for(int j=0; j<6; j++) { if(j>0) macStr += ":"; char buf[3]; sprintf(buf, "%02X", fleet[i].mac[j]); macStr += buf; }
-            String macClean = macStr; macClean.replace(":", ""); 
-            html += "<div class='card'><h4>Gauge " + macClean.substring(9) + "</h4><div class='status'><span class='chip'>Mode <b>" + String(MODE_NAMES[fleet[i].mode]) + "</b></span></div><div class='row'><button onclick=\"rem('/rem?mac=" + macClean + "&mode=0',this)\">Boost</button><button onclick=\"rem('/rem?mac=" + macClean + "&mode=1',this)\">AFR</button><button onclick=\"rem('/rem?mac=" + macClean + "&mode=2',this)\">Water</button><button onclick=\"rem('/rem?mac=" + macClean + "&mode=3',this)\">Oil</button></div></div>";
-        }
+  {
+    PeerGauge peers[10];                       // consistent copy — fleet[] is written from the ESP-NOW callback
+    int n_peers = fleet_snapshot(peers, 10);
+    if (n_peers > 0) {
+      html += "<span class='lbl'>Remote Gauges</span>";
+      for(int i=0; i<n_peers; i++) {
+          if (millis() - peers[i].last_seen < 10000) {
+              String macStr = "";
+              for(int j=0; j<6; j++) { if(j>0) macStr += ":"; char buf[3]; sprintf(buf, "%02X", peers[i].mac[j]); macStr += buf; }
+              String macClean = macStr; macClean.replace(":", "");
+              html += "<div class='card'><h4>Gauge " + macClean.substring(9) + "</h4><div class='status'><span class='chip'>Mode <b>" + String(MODE_NAMES[constrain(peers[i].mode,0,3)]) + "</b></span></div><div class='row'><button onclick=\"rem('/rem?mac=" + macClean + "&mode=0',this)\">Boost</button><button onclick=\"rem('/rem?mac=" + macClean + "&mode=1',this)\">AFR</button><button onclick=\"rem('/rem?mac=" + macClean + "&mode=2',this)\">Water</button><button onclick=\"rem('/rem?mac=" + macClean + "&mode=3',this)\">Oil</button></div></div>";
+          }
+      }
     }
   }
   // Background-fetch helpers. Each control updates from the server's reported new
@@ -642,7 +657,19 @@ void handleFont() {
 }
 // Capture the live RGB framebuffer and serve it as a BMP image.
 // The RGB panel keeps 2 PSRAM framebuffers; we grab whichever is current.
+// Row-streamed: converts + sends one row at a time from a static buffer, so a
+// snapshot no longer allocates ~691KB of PSRAM per request. Rate-limited since
+// each request still blocks the loop (LVGL) for the duration of the send.
+// The framebuffer is read unlocked while the panel scans it — occasional
+// tearing is accepted for a diagnostic view; do NOT lock against the vsync path.
 void handleSnapshot() {
+    static uint32_t last_snap_ms = 0;
+    if (last_snap_ms && millis() - last_snap_ms < 500) {
+        server.send(429, "text/plain", "Too fast");
+        return;
+    }
+    last_snap_ms = millis();
+
     void *fb0 = nullptr, *fb1 = nullptr;
     if (esp_lcd_rgb_panel_get_frame_buffer(panel_handle, 2, &fb0, &fb1) != ESP_OK || fb0 == nullptr) {
         server.send(500, "text/plain", "Framebuffer unavailable");
@@ -652,49 +679,40 @@ void handleSnapshot() {
     const int W = 480, H = 480;
     const int row_stride = (W * 3 + 3) & ~3;  // BMP rows padded to 4 bytes
     const int file_size  = 54 + row_stride * H;
+    static uint8_t rowbuf[(480 * 3 + 3) & ~3];  // one padded BMP row (1440B)
 
-    uint8_t* bmp = (uint8_t*)heap_caps_malloc(file_size, MALLOC_CAP_SPIRAM);
-    if (!bmp) {
-        server.send(500, "text/plain", "Out of PSRAM");
-        return;
-    }
-
-    // --- BMP file header (14 bytes) ---
-    memset(bmp, 0, 54);
-    bmp[0] = 'B'; bmp[1] = 'M';
-    *(uint32_t*)(bmp + 2)  = file_size;
-    *(uint32_t*)(bmp + 10) = 54;          // pixel data offset
-    // --- DIB header (40 bytes) ---
-    *(uint32_t*)(bmp + 14) = 40;          // header size
-    *(int32_t*) (bmp + 18) = W;
-    *(int32_t*) (bmp + 22) = -H;          // negative = top-down row order
-    *(uint16_t*)(bmp + 26) = 1;           // colour planes
-    *(uint16_t*)(bmp + 28) = 24;          // bits per pixel (RGB888)
-    *(uint32_t*)(bmp + 34) = row_stride * H;
-
-    // --- Convert RGB565 framebuffer → RGB888 BMP pixel data ---
-    const uint16_t* src = (const uint16_t*)fb0;
-    uint8_t* dst = bmp + 54;
-    for (int y = 0; y < H; y++) {
-        for (int x = 0; x < W; x++) {
-            uint16_t px = src[y * W + x];
-            dst[x*3 + 0] = (px & 0x1F)         << 3;  // B
-            dst[x*3 + 1] = ((px >> 5)  & 0x3F) << 2;  // G
-            dst[x*3 + 2] = ((px >> 11) & 0x1F) << 3;  // R
-        }
-        dst += row_stride;
-    }
+    // --- BMP file (14) + DIB (40) header ---
+    uint8_t hdr[54];
+    memset(hdr, 0, sizeof(hdr));
+    hdr[0] = 'B'; hdr[1] = 'M';
+    *(uint32_t*)(hdr + 2)  = file_size;
+    *(uint32_t*)(hdr + 10) = 54;          // pixel data offset
+    *(uint32_t*)(hdr + 14) = 40;          // DIB header size
+    *(int32_t*) (hdr + 18) = W;
+    *(int32_t*) (hdr + 22) = -H;          // negative = top-down row order
+    *(uint16_t*)(hdr + 26) = 1;           // colour planes
+    *(uint16_t*)(hdr + 28) = 24;          // bits per pixel (RGB888)
+    *(uint32_t*)(hdr + 34) = row_stride * H;
 
     server.setContentLength(file_size);
     server.send(200, "image/bmp", "");
     WiFiClient client = server.client();
-    size_t sent = 0;
-    while (sent < (size_t)file_size) {
-        size_t chunk = min((size_t)4096, (size_t)file_size - sent);
-        client.write(bmp + sent, chunk);
-        sent += chunk;
+    client.write(hdr, sizeof(hdr));
+
+    // --- Convert RGB565 → RGB888 one row at a time and stream it out ---
+    const uint16_t* src = (const uint16_t*)fb0;
+    memset(rowbuf, 0, sizeof(rowbuf));    // zero the padding bytes once
+    for (int y = 0; y < H; y++) {
+        const uint16_t* srow = src + y * W;
+        for (int x = 0; x < W; x++) {
+            uint16_t px = srow[x];
+            rowbuf[x*3 + 0] = (px & 0x1F)         << 3;  // B
+            rowbuf[x*3 + 1] = ((px >> 5)  & 0x3F) << 2;  // G
+            rowbuf[x*3 + 2] = ((px >> 11) & 0x1F) << 3;  // R
+        }
+        if (client.write(rowbuf, row_stride) != (size_t)row_stride) return;  // client gone
+        if ((y & 31) == 31) delay(0);     // feed watchdog / WiFi stack every 32 rows
     }
-    heap_caps_free(bmp);
 }
 
 // Auto-refreshing preview page — connect to gauge WiFi, open in browser
@@ -714,7 +732,7 @@ void handlePreview() {
         "</div>"
         "<script>"
         "function reload(){document.getElementById('scr').src='/snapshot?t='+Date.now()}"
-        "var iv=setInterval(reload,2000);"  // auto-refresh every 2s
+        "var iv=setInterval(reload,3000);"  // auto-refresh every 3s (snapshot is rate-limited)
         "</script>"
         "</body></html>";
     server.send(200, "text/html", html);
@@ -766,7 +784,7 @@ void handleOTADone() {
     html += "</body></html>";
     server.sendHeader("Connection", "close");
     server.send(200, "text/html", html);
-    if (ok) { delay(1000); ESP.restart(); }
+    if (ok) reboot_at_ms = millis() + 800;  // reboot from loop() after the response flushes
 }
 
 void handleName() {
@@ -780,12 +798,12 @@ void handleName() {
             preferences.end();
             server.sendHeader("Location", "/");
             server.send(303);
-            server.client().flush();
-            delay(300);
-            ESP.restart(); // Restart to apply new AP SSID and BLE name
+            reboot_at_ms = millis() + 400;  // restart (from loop) to apply new AP SSID
         } else {
             server.send(400, "text/plain", "Name must be 1-20 characters");
         }
+    } else {
+        server.send(400, "text/plain", "Missing name");  // was: no response at all (client hung)
     }
 }
 
@@ -900,6 +918,11 @@ void setup_wifi() {
   // Reduce WiFi power to minimize RF interference with display PSRAM bus
   esp_wifi_set_max_tx_power(34); // Reduce to ~8.5dBm to minimise PSRAM bus contention during TX bursts
 
+  // Cache our own MACs once — OnDataRecv filters self-echoes against these
+  // instead of calling into the WiFi driver per packet.
+  WiFi.macAddress(my_sta_mac);
+  WiFi.softAPmacAddress(my_ap_mac);
+
   if (esp_now_init() != ESP_OK) return;
   esp_now_register_recv_cb(OnDataRecv);
   
@@ -933,14 +956,6 @@ void common_label_setup() {
   val_label_dec = lv_label_create(gauge_scr);
   lv_obj_set_style_text_color(val_label_dec, lv_color_hex(text_color), 0);
   lv_obj_set_style_clip_corner(val_label_dec, true, 0);
-
-  // Reserve space for a single-digit decimal (one place) to avoid tearing
-  // lv_obj_set_width(val_label_dec, 64); // fixed width for ".X" (wider to avoid wrapping)
-  // Prevent LVGL from breaking the label into multiple lines; clip overflow instead
-  // lv_label_set_long_mode(val_label_dec, LV_LABEL_LONG_CLIP);
-  // Ensure label height can hold the large numeric font to avoid vertical clipping/wrapping
-  // lv_obj_set_height(val_label_dec, 140);
-  // lv_obj_set_style_text_align(val_label_dec, LV_TEXT_ALIGN_CENTER, 0);
 
     mode_label = lv_label_create(gauge_scr);
     #ifdef LV_FONT_MONTSERRAT_28
@@ -1007,11 +1022,6 @@ void load_current_style() {
     lv_obj_clean(gauge_scr);
     apply_background(gauge_scr);
 
-    //lv_obj_t * img = lv_image_create(gauge_scr);
-    //lv_image_set_src(img, &gauge_bg);
-    //lv_obj_center(img);
-    //lv_obj_set_style_image_opa(img, 50, 0);
-
     // LINK ICON
     link_icon = lv_label_create(gauge_scr);
     lv_obj_set_style_text_font(link_icon, &lv_font_montserrat_20, 0);
@@ -1039,28 +1049,7 @@ void load_current_style() {
     lv_obj_set_style_border_color(bar, lv_color_hex(color_low), 0);  // Start with low color
     lv_obj_set_style_border_side(bar, LV_BORDER_SIDE_FULL, 0);
     lv_obj_set_style_radius(bar, ring_size / 2, 0);  // Full circle (half of size)
-    
-    // COMMENTED OUT: Horizontal bar UI
-    // bar = lv_bar_create(lv_scr_act());
-    // lv_obj_set_size(bar, 380, 48); // twice as thick
-    // lv_obj_align(bar, LV_ALIGN_CENTER, 0, 40); // move bar up to avoid network icon overlap
-    // lv_bar_set_range(bar, 0, 100);
-    // lv_bar_set_value(bar, 0, LV_ANIM_OFF);
-    // lv_obj_set_style_bg_color(bar, lv_color_hex(color_bar_bg), LV_PART_MAIN);
-    // lv_obj_set_style_bg_opa(bar, 255, LV_PART_MAIN);
-    // lv_obj_set_style_bg_color(bar, lv_color_make(0,0,0), LV_PART_INDICATOR);
-    // lv_obj_set_style_bg_opa(bar, 255, LV_PART_INDICATOR);
-    // lv_obj_set_style_pad_all(bar, 4, 0);
-    // lv_obj_set_style_radius(bar, 4, LV_PART_MAIN);
-    // lv_obj_set_style_radius(bar, 4, LV_PART_INDICATOR);
-    // lv_obj_remove_style(bar, NULL, LV_PART_KNOB);
-    // lv_obj_set_style_clip_corner(bar, true, LV_PART_MAIN);
-    // lv_obj_set_style_clip_corner(bar, true, LV_PART_INDICATOR);
-    
 
-    // COMMENTED OUT: Peak hold stripe
-    // peak_dot = lv_obj_create(lv_scr_act());
-    // lv_obj_set_size(peak_dot, 4, 56); // thin vertical stripe that extends above/below bar
     peak_dot = lv_obj_create(gauge_scr);
     lv_obj_set_size(peak_dot, 8, 8);  // Small indicator dot (hidden for now)
     lv_obj_set_style_radius(peak_dot, 4, 0);
@@ -1420,11 +1409,19 @@ void update_gauge_master() {
       text_changed = true;
     }
     if (text_changed) {
-      // Force LVGL to remeasure before reading width — avoids stale-cache lag on variable-width fonts
-      lv_obj_update_layout(val_label_int);
-      lv_obj_update_layout(val_label_dec);
-      int int_w = lv_obj_get_width(val_label_int);
-      int dec_w = lv_obj_get_width(val_label_dec);
+      // Measure the new strings directly with the font — same result as the old
+      // lv_obj_update_layout()+lv_obj_get_width() (label width == text width for
+      // auto-sized labels) but without forcing a full layout pass per value tick,
+      // and it can never read a stale cached width.
+      lv_point_t sz;
+      lv_text_get_size(&sz, b1, lv_obj_get_style_text_font(val_label_int, LV_PART_MAIN),
+                       lv_obj_get_style_text_letter_space(val_label_int, LV_PART_MAIN),
+                       0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+      int int_w = sz.x;
+      lv_text_get_size(&sz, b2, lv_obj_get_style_text_font(val_label_dec, LV_PART_MAIN),
+                       lv_obj_get_style_text_letter_space(val_label_dec, LV_PART_MAIN),
+                       0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+      int dec_w = sz.x;
       // Fixed anchor: integer right-edge and decimal left-edge both at screen_centre + ANCHOR_OFS
       const int ANCHOR_OFS = 44;
       lv_obj_align(val_label_int, LV_ALIGN_CENTER, ANCHOR_OFS - int_w / 2, 5);
@@ -1671,7 +1668,7 @@ void loop() {
   ArduinoOTA.handle();
   
   // --- FLAG HANDLERS ---
-  if (flag_reboot) { delay(500); ESP.restart(); }
+  if (reboot_at_ms && (int32_t)(millis() - reboot_at_ms) >= 0) ESP.restart();
   if (flag_theme_update) {
       flag_theme_update = false;
       apply_theme_colors();   // in-place colour/gradient/font update (no teardown)
@@ -1684,6 +1681,11 @@ void loop() {
   }
   if (flag_bright_update) {
       flag_bright_update = false;
+      if (pending_brightness >= 0) {  // remote (ESP-NOW) change: apply + persist here
+          current_brightness = pending_brightness;
+          pending_brightness = -1;
+          preferences.begin("gauge", false); preferences.putInt("bright", current_brightness); preferences.end();
+      }
       set_backlight(current_brightness);
   }
   if (flag_new_peer) {
@@ -1701,6 +1703,11 @@ void loop() {
   }
   if (flag_mode_update) {
       flag_mode_update = false;
+      if (pending_mode >= 0) {  // remote (ESP-NOW) change: apply + persist here
+          current_mode = (GaugeMode)pending_mode;
+          pending_mode = -1;
+          preferences.begin("gauge", false); preferences.putInt("mode", (int)current_mode); preferences.end();
+      }
       lv_label_set_text(mode_label, MODE_NAMES[current_mode]);
       // Fresh state for the new metric: drop stale peaks and snap the needle so
       // it doesn't sweep across the dial from the old mode's value.

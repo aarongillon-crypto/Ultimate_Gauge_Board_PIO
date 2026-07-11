@@ -1,4 +1,5 @@
 #include "config_store.h"
+#include "haltech_channels.h"   // units_* display preferences
 #include <Preferences.h>
 
 static Preferences preferences;   // sole instance in the firmware
@@ -105,6 +106,8 @@ void cfg_persist_behavior(const BehaviorConfig& b) {
   char k[10];
   preferences.begin("gauge", false);
   for (uint8_t i = 0; i < 4; i++) {
+    behavior_key(k,i,"ch");  preferences.putUShort(k, b.mode[i].chan_key);
+    behavior_key(k,i,"lbl"); preferences.putString(k, b.mode[i].label);
     behavior_key(k,i,"min"); preferences.putFloat(k, b.mode[i].min);
     behavior_key(k,i,"max"); preferences.putFloat(k, b.mode[i].max);
     behavior_key(k,i,"z1");  preferences.putFloat(k, b.mode[i].z1);
@@ -121,6 +124,11 @@ void cfg_load_behavior(BehaviorConfig* out) {
   const BehaviorConfig& d = BEHAVIOR_DEFAULTS;
   preferences.begin("gauge", true);
   for (uint8_t i = 0; i < 4; i++) {
+    behavior_key(k,i,"ch");  out->mode[i].chan_key = preferences.getUShort(k, d.mode[i].chan_key);
+    behavior_key(k,i,"lbl");
+    String lbl = preferences.getString(k, d.mode[i].label);
+    strncpy(out->mode[i].label, lbl.c_str(), sizeof(out->mode[i].label) - 1);
+    out->mode[i].label[sizeof(out->mode[i].label) - 1] = 0;
     behavior_key(k,i,"min"); out->mode[i].min = preferences.getFloat(k, d.mode[i].min);
     behavior_key(k,i,"max"); out->mode[i].max = preferences.getFloat(k, d.mode[i].max);
     behavior_key(k,i,"z1");  out->mode[i].z1  = preferences.getFloat(k, d.mode[i].z1);
@@ -157,7 +165,11 @@ bool cfg_load_all(const char* defaultName) {
   debug_mode_enabled = preferences.getBool("dbg", false);
   current_font = (uint8_t)preferences.getUInt("font", 0);
   device_name = preferences.getString("devname", defaultName);
-  secondary_metric = (uint8_t)preferences.getUInt("sm", 0);
+  secondary_chan = preferences.getUShort("sm2", 0);   // chan_key (old "sm" index key retired)
+  units_press_psi  = preferences.getBool("u_psi",  true);
+  units_temp_f     = preferences.getBool("u_degf", false);
+  units_speed_mph  = preferences.getBool("u_mph",  false);
+  units_lambda_afr = preferences.getBool("u_afr",  true);
   current_page = (DisplayPage)preferences.getUInt("page", 0);
   active_theme = (uint8_t)preferences.getUInt("atheme", 0);
   trimpot_theme_sync = preferences.getBool("tpsync", false);

@@ -1,15 +1,15 @@
 // Definitions for the shared globals declared in app_state.h.
 #include "app_state.h"
 
-const char* MODE_NAMES[4] = { "BOOST", "AFR", "WATER", "OIL P" };
-
-// Defaults reproduce the pre-config behavior EXACTLY (old RANGES table +
-// hardcoded zone thresholds; WATER/OIL were always-mid → zones out of range).
+// Defaults reproduce the classic 4 modes, now bound to their V2-correct
+// channels: BOOST = Manifold Pressure (0x360/2), AFR = Wideband 1 (0x368/0),
+// WATER = Coolant Temperature (0x3E0/0 — was wrongly read from 0x362),
+// OIL P = Oil Pressure (0x361/2). Ranges in display units (psi/°C/AFR).
 const BehaviorConfig BEHAVIOR_DEFAULTS = {
-  { { -15, 30,      0,   20   },     // BOOST: <0 low, <20 mid, else high
-    {   8, 22,     10,   15   },     // AFR:   <10 low, <15 mid, else high
-    {   0, 120, -9999, 9999   },     // WATER: always mid
-    {   0, 100, -9999, 9999   } },   // OIL P: always mid
+  { { (uint16_t)((0x360 << 4) | 2), "BOOST", -15, 30,      0,   20   },  // <0 low, <20 mid, else high
+    { (uint16_t)((0x368 << 4) | 0), "AFR",     8, 22,     10,   15   },  // <10 low, <15 mid, else high
+    { (uint16_t)((0x3E0 << 4) | 0), "WATER",   0, 120, -9999, 9999   },  // always mid
+    { (uint16_t)((0x361 << 4) | 2), "OIL P",   0, 100, -9999, 9999   } },// always mid
   0.24f,   // smoothing
   40.0f,   // max_rate units/sec
   30000    // peak_hold_ms
@@ -25,13 +25,7 @@ DisplayPage current_page = PAGE_GAUGE;
 String device_name = "Gauge";
 int current_brightness = 40;
 uint8_t current_font = 0;
-uint8_t secondary_metric = 0;
-// 0=None 1=IAT 2=OilTemp 3=FuelTemp 4=FuelPress 5=TPS 6=EngLoad 7=IgnTiming 8=Baro 9=Speed 10=Gear
-const char* SECONDARY_NAMES[] = {
-  "None", "Intake Air Temp", "Oil Temp", "Fuel Temp", "Fuel Press",
-  "TPS", "Eng Load", "Ign Timing", "Baro", "Speed", "Gear"
-};
-const int SECONDARY_COUNT = 11;
+uint16_t secondary_chan = 0;   // chan_key, 0 = none
 
 uint32_t text_color = 0xFFD700;
 uint32_t color_low = 0x2196F3, color_mid = 0x4CAF50, color_high = 0xF44336;

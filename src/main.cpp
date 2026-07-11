@@ -157,11 +157,18 @@ void loop() {
 
   // Behavior config pushed in via fleet CONFIG_SYNC: apply + persist here.
   {
-    BehaviorConfig bc;
-    if (fleet_take_pending_config(&bc)) {
+    BehaviorConfig bc; uint8_t units;
+    if (fleet_take_pending_config(&bc, &units)) {
         behavior = bc;
         cfg_persist_behavior(behavior);
-        snap_displayed = true;   // active range may have changed — snap, don't sweep
+        if (units != 0xFF) {   // v2.1.0 senders include display-unit prefs
+            units_press_psi  = units & 1;  cfg_put_bool("u_psi",  units_press_psi);
+            units_temp_f     = units & 2;  cfg_put_bool("u_degf", units_temp_f);
+            units_speed_mph  = units & 4;  cfg_put_bool("u_mph",  units_speed_mph);
+            units_lambda_afr = units & 8;  cfg_put_bool("u_afr",  units_lambda_afr);
+        }
+        lv_label_set_text(mode_label, behavior.mode[current_mode].label);
+        snap_displayed = true;   // active channel/range may have changed — snap, don't sweep
     }
   }
 
@@ -208,7 +215,7 @@ void loop() {
           pending_mode = -1;
           cfg_put_int("mode", (int)current_mode);
       }
-      lv_label_set_text(mode_label, MODE_NAMES[current_mode]);
+      lv_label_set_text(mode_label, behavior.mode[current_mode].label);
       // Fresh state for the new metric: drop stale peaks and snap the needle so
       // it doesn't sweep across the dial from the old mode's value.
       peak_val = -999.0f; peak_low_val = 999.0f; peak_timer = millis();
@@ -241,7 +248,7 @@ void loop() {
           (int)can_status.state,
           can_status.tx_error_counter,
           can_status.rx_error_counter,
-          MODE_NAMES[current_mode],
+          behavior.mode[current_mode].label,
           displayed_val);
       Serial.printf("[DBG] Loop stack high-water: %u\n", uxTaskGetStackHighWaterMark(NULL));
   }

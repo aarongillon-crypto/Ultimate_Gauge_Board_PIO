@@ -1,5 +1,6 @@
 #include "fleet.h"
 #include "themes.h"
+#include "haltech_channels.h"   // units_* for CONFIG_SYNC
 #include <WiFi.h>
 #include <esp_now.h>
 #include <esp_wifi.h>
@@ -36,12 +37,18 @@ typedef struct __attribute__((packed)) {
   char name[21];
 } PktThemeFull;               // 75 B
 
+// APPEND-ONLY: v2.0.0 peers length-check against their (shorter) struct and
+// read the prefix, so new fields must only ever be added at the end.
 typedef struct __attribute__((packed)) {
   PktHeader h;
   float mmin[4], mmax[4], z1[4], z2[4];
   float smoothing, max_rate;
   uint32_t peak_hold_ms;
-} PktConfigSync;              // 80 B
+  // --- appended in v2.1.0 (channel-selectable modes + display units) ---
+  uint16_t chan[4];           // per-mode registry chan_key
+  char label[4][14];          // per-mode gauge face label
+  uint8_t units;              // bit0 press_psi, bit1 temp_f, bit2 speed_mph, bit3 lambda_afr
+} PktConfigSync;              // 145 B
 
 typedef struct __attribute__((packed)) { PktHeader h; uint8_t cmd; int32_t value; } PktCmd;  // 9 B
 
@@ -114,13 +121,15 @@ static bool peer_is_v2(const uint8_t *mac) {
 
 // ---------------- staged behavior config (CONFIG_SYNC in) ----------------
 static BehaviorConfig s_pending_cfg;
+static uint8_t s_pending_units = 0xFF;   // 0xFF = sender didn't include units
 static volatile bool s_pending_cfg_valid = false;
 static portMUX_TYPE s_cfg_mux = portMUX_INITIALIZER_UNLOCKED;
 
-bool fleet_take_pending_config(BehaviorConfig *out) {
+bool fleet_take_pending_config(BehaviorConfig *out, uint8_t *units_out) {
   if (!s_pending_cfg_valid) return false;
   taskENTER_CRITICAL(&s_cfg_mux);
   *out = s_pending_cfg;
+  *units_out = s_pending_units;
   s_pending_cfg_valid = false;
   taskEXIT_CRITICAL(&s_cfg_mux);
   return true;
@@ -198,16 +207,27 @@ static void handle_v2(const uint8_t *mac, const uint8_t *data, int len) {
       break;
     }
     case PKT_CONFIG_SYNC: {
-      if (len < (int)sizeof(PktConfigSync)) return;
+      // Accept both the v2.0.0 prefix (no channels/labels/units) and the full
+      // v2.1.0 packet — append-only layout keeps mixed fleets working.
+      const size_t OLD_SIZE = offsetof(PktConfigSync, chan);
+      if (len < (int)OLD_SIZE) return;
+      bool full = len >= (int)sizeof(PktConfigSync);
       const PktConfigSync *p = (const PktConfigSync *)data;
       taskENTER_CRITICAL(&s_cfg_mux);
+      s_pending_cfg = behavior;   // fields the sender doesn't carry stay local
       for (int i = 0; i < 4; i++) {
         s_pending_cfg.mode[i].min = p->mmin[i]; s_pending_cfg.mode[i].max = p->mmax[i];
         s_pending_cfg.mode[i].z1  = p->z1[i];   s_pending_cfg.mode[i].z2  = p->z2[i];
+        if (full) {
+          s_pending_cfg.mode[i].chan_key = p->chan[i];
+          memcpy(s_pending_cfg.mode[i].label, p->label[i], sizeof(s_pending_cfg.mode[i].label));
+          s_pending_cfg.mode[i].label[sizeof(s_pending_cfg.mode[i].label) - 1] = 0;
+        }
       }
       s_pending_cfg.smoothing = p->smoothing;
       s_pending_cfg.max_rate = p->max_rate;
       s_pending_cfg.peak_hold_ms = p->peak_hold_ms;
+      s_pending_units = full ? p->units : 0xFF;
       s_pending_cfg_valid = true;
       taskEXIT_CRITICAL(&s_cfg_mux);
       break;
@@ -324,10 +344,14 @@ void fleet_push_config(const uint8_t *mac) {
   for (int i = 0; i < 4; i++) {
     p.mmin[i] = behavior.mode[i].min; p.mmax[i] = behavior.mode[i].max;
     p.z1[i] = behavior.mode[i].z1;    p.z2[i] = behavior.mode[i].z2;
+    p.chan[i] = behavior.mode[i].chan_key;
+    memcpy(p.label[i], behavior.mode[i].label, sizeof(p.label[i]));
   }
   p.smoothing = behavior.smoothing;
   p.max_rate = behavior.max_rate;
   p.peak_hold_ms = behavior.peak_hold_ms;
+  p.units = (units_press_psi ? 1 : 0) | (units_temp_f ? 2 : 0)
+          | (units_speed_mph ? 4 : 0) | (units_lambda_afr ? 8 : 0);
   fleet_send(mac, &p, sizeof(p));
 }
 

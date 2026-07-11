@@ -39,4 +39,5 @@ void fleet_push_config(const uint8_t *mac);
 void fleet_send_identify(const uint8_t *mac);
 
 // Behavior config staged from a CONFIG_SYNC packet; consumed in loop().
-bool fleet_take_pending_config(BehaviorConfig *out);
+// units_out: bitmask (bit0 psi, bit1 °F, bit2 mph, bit3 AFR), 0xFF = not sent.
+bool fleet_take_pending_config(BehaviorConfig *out, uint8_t *units_out);

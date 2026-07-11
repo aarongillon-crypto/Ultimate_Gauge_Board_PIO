@@ -22,13 +22,12 @@ static uint32_t parseHex(const char* s) {
 
 // ---------- /api/state ----------
 static void apiState() {
-  HaltechData_t d;
-  haltech_get(&d);
   JsonDocument doc;
   doc["name"] = device_name;
   doc["fw"] = FIRMWARE_VERSION;
   doc["build"] = FIRMWARE_BUILD;
   doc["mode"] = (int)current_mode;
+  doc["modeLabel"] = behavior.mode[current_mode].label;
   doc["page"] = (int)current_page;
   doc["bright"] = current_brightness;
   doc["font"] = current_font;
@@ -36,20 +35,46 @@ static void apiState() {
   doc["stats"] = show_perf_stats;
   doc["dbg"] = debug_mode_enabled;
   doc["peak"] = peak_hold_enabled;
-  doc["sec"] = secondary_metric;
+  doc["sec"] = secondary_chan;
   doc["slot"] = active_theme;
   doc["tpsync"] = trimpot_theme_sync;
   doc["peers"] = fleet_count;
   doc["canOk"] = canbus_ok;
   doc["uptime"] = millis() / 1000;
   doc["heap"] = ESP.getFreeHeap();
-  JsonObject live = doc["live"].to<JsonObject>();
-  live["boost"] = d.boost_psi;   live["afr"] = d.afr_gas;
-  live["water"] = d.water_temp_c; live["oilp"] = d.oil_press_psi;
-  live["rpm"] = d.rpm;           live["iat"] = d.intake_air_temp_c;
-  live["oilt"] = d.oil_temp_c;   live["fuelp"] = d.fuel_press_psi;
-  live["tps"] = d.tps_percent;   live["spd"] = d.vehicle_speed_kph;
-  live["gear"] = d.gear;
+  // Live values for the 4 configured modes + secondary (display units).
+  JsonArray live = doc["live"].to<JsonArray>();
+  for (int i = 0; i < 4; i++) {
+    int ci = chan_index_from_key(behavior.mode[i].chan_key);
+    live.add(chan_display(ci, haltech_value(ci)));
+  }
+  String out; serializeJson(doc, out);
+  srv->send(200, "application/json", out);
+}
+
+// ---------- /api/channels — the machine-readable registry contract ----------
+// Metadata + live values for every channel. This is the same contract the
+// planned PC/Web layout-designer GUI consumes. key=0 marks bit-addressed
+// channels (not bindable as gauge modes).
+static void apiChannels() {
+  JsonDocument doc;
+  JsonArray arr = doc["channels"].to<JsonArray>();
+  for (int i = 0; i < HALTECH_CHANNEL_COUNT; i++) {
+    const HaltechChannel& c = HALTECH_CHANNELS[i];
+    JsonObject o = arr.add<JsonObject>();
+    char idbuf[8]; snprintf(idbuf, sizeof(idbuf), "0x%03X", c.can_id);
+    o["key"] = chan_key(i);
+    o["id"] = idbuf;
+    o["off"] = c.offset;
+    if (c.bit_start != 0xFF) o["bit"] = c.bit_start;
+    o["name"] = c.name;
+    o["unit"] = chan_unit_str(i);
+    uint32_t age = haltech_age_ms(i);
+    if (age != UINT32_MAX) {
+      o["val"] = serialized(String(chan_display(i, haltech_value(i)), 2));
+      o["age"] = age;
+    }
+  }
   String out; serializeJson(doc, out);
   srv->send(200, "application/json", out);
 }
@@ -188,13 +213,17 @@ static void apiConfigGet() {
   JsonArray modes = doc["modes"].to<JsonArray>();
   for (int i = 0; i < 4; i++) {
     JsonObject m = modes.add<JsonObject>();
-    m["name"] = MODE_NAMES[i];
+    m["chan"] = behavior.mode[i].chan_key;
+    m["label"] = behavior.mode[i].label;
     m["min"] = behavior.mode[i].min; m["max"] = behavior.mode[i].max;
     m["z1"] = behavior.mode[i].z1;   m["z2"] = behavior.mode[i].z2;
   }
   doc["smoothing"] = behavior.smoothing;
   doc["maxRate"] = behavior.max_rate;
   doc["peakHoldMs"] = behavior.peak_hold_ms;
+  JsonObject u = doc["units"].to<JsonObject>();
+  u["psi"] = units_press_psi; u["degF"] = units_temp_f;
+  u["mph"] = units_speed_mph; u["afr"] = units_lambda_afr;
   String out; serializeJson(doc, out);
   srv->send(200, "application/json", out);
 }
@@ -213,6 +242,13 @@ static void apiConfigSet() {
   BehaviorConfig b = behavior;
   for (int i = 0; i < 4; i++) {
     JsonObject m = modes[i];
+    uint16_t ck = m["chan"] | behavior.mode[i].chan_key;
+    if (chan_index_from_key(ck) < 0) { srv->send(400, "text/plain", "Unknown channel"); return; }
+    b.mode[i].chan_key = ck;
+    const char* lbl = m["label"] | behavior.mode[i].label;
+    strncpy(b.mode[i].label, lbl, sizeof(b.mode[i].label) - 1);
+    b.mode[i].label[sizeof(b.mode[i].label) - 1] = 0;
+    if (!b.mode[i].label[0]) strncpy(b.mode[i].label, "GAUGE", sizeof(b.mode[i].label));
     b.mode[i].min = m["min"] | behavior.mode[i].min;
     b.mode[i].max = m["max"] | behavior.mode[i].max;
     b.mode[i].z1  = m["z1"]  | behavior.mode[i].z1;
@@ -223,13 +259,18 @@ static void apiConfigSet() {
   b.max_rate     = constrain((float)(doc["maxRate"] | behavior.max_rate), 1.0f, 10000.0f);
   b.peak_hold_ms = constrain((uint32_t)(doc["peakHoldMs"] | behavior.peak_hold_ms), (uint32_t)1000, (uint32_t)600000);
 
-  bool active_range_changed =
-      b.mode[current_mode].min != behavior.mode[current_mode].min ||
-      b.mode[current_mode].max != behavior.mode[current_mode].max;
+  JsonObject u = doc["units"];
+  if (!u.isNull()) {
+    units_press_psi  = u["psi"]  | units_press_psi;   cfg_put_bool("u_psi",  units_press_psi);
+    units_temp_f     = u["degF"] | units_temp_f;      cfg_put_bool("u_degf", units_temp_f);
+    units_speed_mph  = u["mph"]  | units_speed_mph;   cfg_put_bool("u_mph",  units_speed_mph);
+    units_lambda_afr = u["afr"]  | units_lambda_afr;  cfg_put_bool("u_afr",  units_lambda_afr);
+  }
+
   behavior = b;
   cfg_persist_behavior(behavior);
-  if (active_range_changed) snap_displayed = true;   // rescale without a cross-dial sweep
-  fleet_push_config(nullptr);                        // broadcast to all peers
+  flag_mode_update = true;      // refresh gauge label + snap to the (possibly new) channel
+  fleet_push_config(nullptr);   // broadcast to all peers
   srv->send(200, "text/plain", "OK");
 }
 
@@ -358,9 +399,11 @@ static void apiAction() {
     flag_page_update = true;
     srv->send(200, "text/plain", String(p));
   } else if (name == "sec") {
-    secondary_metric = (uint8_t)constrain(v.toInt(), 0, SECONDARY_COUNT - 1);
-    cfg_put_uint("sm", secondary_metric);
-    srv->send(200, "text/plain", String((int)secondary_metric));
+    uint16_t ck = (uint16_t)v.toInt();   // chan_key, 0 = none
+    if (ck != 0 && chan_index_from_key(ck) < 0) { srv->send(400, "text/plain", "Unknown channel"); return; }
+    secondary_chan = ck;
+    cfg_put_ushort("sm2", secondary_chan);
+    srv->send(200, "text/plain", String((int)secondary_chan));
   } else if (name == "tpsync") {
     trimpot_theme_sync = !trimpot_theme_sync;
     cfg_put_bool("tpsync", trimpot_theme_sync);
@@ -397,6 +440,7 @@ void api_register(WebServer& server) {
   server.on(UriBraces("/api/themes/{}"), HTTP_POST, apiThemeSet);
   server.on(UriBraces("/api/themes/{}/activate"), HTTP_POST, apiThemeActivate);
   server.on(UriBraces("/api/themes/{}/copy"), HTTP_POST, apiThemeCopy);
+  server.on("/api/channels", HTTP_GET, apiChannels);
   server.on("/api/config", HTTP_GET, apiConfigGet);
   server.on("/api/config", HTTP_POST, apiConfigSet);
   server.on("/api/fleet", HTTP_GET, apiFleet);

@@ -1,11 +1,13 @@
 // Gauge SPA — talks to the JSON API (see src/web/api.cpp).
 // GET = read, POST = write. Small writes use query args; themes use JSON bodies.
 'use strict';
-var MN = ['BOOST', 'AFR', 'WATER', 'OIL P'];
-var SEC_NAMES = ['None','Intake Air Temp','Oil Temp','Fuel Temp','Fuel Press','TPS','Eng Load','Ign Timing','Baro','Speed','Gear'];
+var MN = ['M1', 'M2', 'M3', 'M4'];          // generic; local buttons get real labels from config
 var COLOR_KEYS = ['text','low','mid','high','bg','modeLabel','linkIcon','needle','peak'];
 var themesCache = null;   // /api/themes payload
+var chansCache = [];      // /api/channels payload (registry + live values)
+var cfgCache = null;      // /api/config payload
 var editing = -1;         // slot open in the editor, -1 = closed
+var liveOpen = false;
 
 function $(id){ return document.getElementById(id); }
 function toast(msg, err){
@@ -26,7 +28,7 @@ function renderState(s){
   $('devname').textContent = s.name;
   document.title = s.name;
   $('chippeers').textContent = s.peers;
-  $('chipmode').textContent = MN[s.mode] || '?';
+  $('chipmode').textContent = s.modeLabel || ('M' + (s.mode + 1));
   $('chippage').textContent = s.page === 0 ? 'GAUGE' : 'GLOWCRAFT';
   $('chipslot').textContent = 'P' + s.slot + (s.tpsync ? ' ⟲' : '');
   $('chipcan').textContent = s.canOk ? 'OK' : 'DOWN';
@@ -39,6 +41,7 @@ function renderState(s){
   for (var i = 0; i < 4; i++) $('m'+i).classList.toggle('active', s.mode === i);
   $('pg0').classList.toggle('active', s.page === 0);
   $('pg1').classList.toggle('active', s.page === 1);
+  state_sec = s.sec;
   if (document.activeElement !== $('sec')) $('sec').value = s.sec;
   if (!$('newname').value) $('newname').value = s.name;
   $('footer').textContent = 'v' + s.fw + ' · built ' + s.build;
@@ -157,15 +160,39 @@ function rename(){
     .catch(function(){ toast('Rename failed', 1); });
 }
 
+// ---------- channels ----------
+function chanOptions(selected, allowNone){
+  var html = allowNone ? '<option value="0"' + (selected == 0 ? ' selected' : '') + '>None</option>' : '';
+  chansCache.forEach(function(c){
+    if (!c.key) return;   // bit channels are not bindable
+    html += '<option value="' + c.key + '"' + (c.key == selected ? ' selected' : '') + '>'
+      + esc(c.name) + (c.unit ? ' (' + c.unit + ')' : '') + '</option>';
+  });
+  return html;
+}
+function loadChannels(){
+  return jget('/api/channels').then(function(d){
+    chansCache = d.channels;
+    $('sec').innerHTML = chanOptions(state_sec, true);
+    if (cfgCache) renderConfig(cfgCache);   // re-render selects with names
+    if (liveOpen) renderLive();
+  }).catch(function(){});
+}
+var state_sec = 0;
+
 // ---------- behavior config ----------
 var BEHAV_FIELDS = ['min', 'max', 'z1', 'z2'];
+var UNIT_LABELS = { psi: ['Pressure: psi', 'Pressure: kPa'], degF: ['Temp: °F', 'Temp: °C'],
+                    mph: ['Speed: mph', 'Speed: km/h'], afr: ['Lambda: AFR', 'Lambda: λ'] };
 function renderConfig(c){
-  var html = '<div class="crow" style="font-size:12px;color:#868d97"><span style="flex:1"></span>'
-    + BEHAV_FIELDS.map(function(f){ return '<span style="width:64px;text-align:center">' + f.toUpperCase() + '</span>'; }).join('') + '</div>';
+  cfgCache = c;
+  var html = '';
   c.modes.forEach(function(m, i){
-    html += '<div class="crow"><label style="flex:1">' + m.name + '</label>'
+    html += '<div class="crow"><input type="text" id="b_' + i + '_label" value="' + esc(m.label) + '" maxlength="13" style="width:90px;margin:0">'
+      + '<select id="b_' + i + '_chan" style="flex:1;margin-left:8px">' + chanOptions(m.chan, false) + '</select></div>';
+    html += '<div class="crow" style="margin-top:2px">'
       + BEHAV_FIELDS.map(function(f){
-          return '<input type="number" step="any" id="b_' + i + '_' + f + '" value="' + m[f] + '" style="width:64px">';
+          return '<input type="number" step="any" id="b_' + i + '_' + f + '" value="' + m[f] + '" placeholder="' + f + '" title="' + f + '" style="width:23%">';
         }).join('') + '</div>';
   });
   $('behav').innerHTML = html;
@@ -173,30 +200,62 @@ function renderConfig(c){
   $('smval').textContent = c.smoothing.toFixed(2);
   $('maxrate').value = c.maxRate;
   $('pkhold').value = Math.round(c.peakHoldMs / 1000);
+  // Units toggles + local mode button labels
+  Object.keys(UNIT_LABELS).forEach(function(k){
+    var on = c.units[k];
+    var b = $('u_' + k);
+    b.textContent = UNIT_LABELS[k][on ? 0 : 1];
+    b.classList.toggle('on', !!on);
+  });
+  c.modes.forEach(function(m, i){ $('m' + i).textContent = m.label; });
+}
+function tglUnit(k){
+  if (!cfgCache) return;
+  cfgCache.units[k] = !cfgCache.units[k];
+  renderConfig(cfgCache);
+  toast('Unit changed — Save Behavior to apply');
 }
 function loadConfig(){ return jget('/api/config').then(renderConfig).catch(function(){}); }
 function saveConfig(){
+  if (!cfgCache) return;
   var modes = [];
   for (var i = 0; i < 4; i++) {
-    var m = {};
+    var m = { chan: +$('b_' + i + '_chan').value, label: $('b_' + i + '_label').value.trim() || ('M' + (i+1)) };
     var bad = false;
     BEHAV_FIELDS.forEach(function(f){
       var v = parseFloat($('b_' + i + '_' + f).value);
       if (isNaN(v)) bad = true;
       m[f] = v;
     });
-    if (bad || !(m.min < m.max)) { toast(MN[i] + ': min must be < max', 1); return; }
+    if (bad || !(m.min < m.max)) { toast('Mode ' + (i+1) + ': min must be < max', 1); return; }
     modes.push(m);
   }
   var body = {
     modes: modes,
     smoothing: (+$('smooth').value) / 100,
     maxRate: parseFloat($('maxrate').value) || 40,
-    peakHoldMs: (parseInt($('pkhold').value, 10) || 30) * 1000
+    peakHoldMs: (parseInt($('pkhold').value, 10) || 30) * 1000,
+    units: cfgCache.units
   };
   post('/api/config', body)
-    .then(function(){ toast('Behavior saved + synced'); loadConfig(); })
+    .then(function(){ toast('Behavior saved + synced'); loadConfig(); refreshState(); })
     .catch(function(){ toast('Save failed', 1); });
+}
+
+// ---------- live channels ----------
+function renderLive(){
+  var rows = chansCache.filter(function(c){ return c.age !== undefined && c.age < 3000; });
+  if (!rows.length) { $('livechans').innerHTML = '<small>No live CAN data (check bus / enable Test mode).</small>'; return; }
+  $('livechans').innerHTML = rows.map(function(c){
+    return '<div class="crow" style="margin:2px 0"><span>' + esc(c.name) + '</span><b>'
+      + c.val + ' ' + esc(c.unit || '') + '</b></div>';
+  }).join('');
+}
+function toggleLive(){
+  liveOpen = !liveOpen;
+  $('livechans').classList.toggle('hidden', !liveOpen);
+  $('livebtn').textContent = liveOpen ? 'Hide live channel data' : 'Show live channel data';
+  if (liveOpen) loadChannels();
 }
 
 // ---------- fleet ----------
@@ -239,11 +298,8 @@ function loadFleet(){ return jget('/api/fleet').then(renderFleet).catch(function
 
 // ---------- boot ----------
 (function(){
-  var sel = $('sec');
-  SEC_NAMES.forEach(function(n, i){
-    var o = document.createElement('option'); o.value = i; o.textContent = n; sel.appendChild(o);
-  });
-  refreshState(); loadThemes(); loadFleet(); loadConfig();
+  refreshState(); loadThemes(); loadFleet(); loadConfig(); loadChannels();
   setInterval(refreshState, 3000);
   setInterval(loadFleet, 5000);
+  setInterval(function(){ if (liveOpen) loadChannels(); }, 2000);
 })();

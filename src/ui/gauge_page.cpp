@@ -45,7 +45,7 @@ static void common_label_setup() {
     lv_obj_set_style_text_font(mode_label, &lv_font_montserrat_14, 0);
     #endif
     lv_obj_set_style_text_color(mode_label, lv_color_hex(color_mode_label), 0);
-    lv_label_set_text(mode_label, MODE_NAMES[current_mode]);
+    lv_label_set_text(mode_label, behavior.mode[current_mode].label);
 #if FONT_FIRAMONO_AVAILABLE
     const lv_font_t* font_large = (current_font == 1) ? &firamono_120 : &dseg14_120;
     const lv_font_t* font_mid   = (current_font == 1) ? &firamono_96  : &dseg14_96;
@@ -200,29 +200,32 @@ void apply_page() {
   lv_scr_load(current_page == PAGE_GLOWCRAFT ? glowcraft_scr : gauge_scr);
 }
 
-static void format_secondary(uint8_t metric, const HaltechData_t* d, char* buf, size_t sz) {
-    switch (metric) {
-        case 1:  snprintf(buf, sz, "IAT %d\xc2\xb0""C",      d->intake_air_temp_c); break;
-        case 2:  snprintf(buf, sz, "OIL T %.0f\xc2\xb0""C",  d->oil_temp_c);        break;
-        case 3:  snprintf(buf, sz, "FUL T %.0f\xc2\xb0""C",  d->fuel_temp_c);       break;
-        case 4:  snprintf(buf, sz, "FUL P %.1f PSI",          d->fuel_press_psi);    break;
-        case 5:  snprintf(buf, sz, "TPS %d%%",                d->tps_percent);       break;
-        case 6:  snprintf(buf, sz, "LOAD %d%%",               d->engine_load_pct);   break;
-        case 7:  snprintf(buf, sz, "IGN %.1f\xc2\xb0",        d->ign_timing_deg);    break;
-        case 8:  snprintf(buf, sz, "BARO %.1f kPa",           d->baro_kpa);          break;
-        case 9:  snprintf(buf, sz, "%.0f km/h",               d->vehicle_speed_kph); break;
-        case 10: {
-          int8_t g = d->gear;
-          if      (g == 0)  snprintf(buf, sz, "GEAR N");
-          else if (g <  0)  snprintf(buf, sz, "GEAR R");
-          else              snprintf(buf, sz, "GEAR %d", (int)g);
-          break;
-        }
-        default: snprintf(buf, sz, "--"); break;
+// Secondary readout: any registry channel by chan_key. Short uppercase name +
+// value + display unit; booleans/enums get sensible text (gear: N/R/number).
+static void format_secondary(uint16_t chan, char* buf, size_t sz) {
+    int idx = chan_index_from_key(chan);
+    if (idx < 0) { snprintf(buf, sz, "--"); return; }
+    const HaltechChannel& c = HALTECH_CHANNELS[idx];
+    float v = haltech_value(idx);
+
+    // Short label: first 10 chars of the channel name, uppercased.
+    char nm[11];
+    strncpy(nm, c.name, sizeof(nm) - 1); nm[sizeof(nm) - 1] = 0;
+    for (char* p = nm; *p; p++) *p = toupper((unsigned char)*p);
+
+    if (c.unit == U_BOOL) {
+        snprintf(buf, sz, "%s %s", nm, v != 0 ? "ON" : "OFF");
+    } else if (c.unit == U_ENUM && strcmp(c.name, "Gear") == 0) {
+        int g = (int)v;
+        if (g == 0)     snprintf(buf, sz, "GEAR N");
+        else if (g < 0) snprintf(buf, sz, "GEAR R");
+        else            snprintf(buf, sz, "GEAR %d", g);
+    } else {
+        snprintf(buf, sz, "%s %.1f%s", nm, chan_display(idx, v), chan_unit_str(idx));
     }
 }
 
-static void update_ui(float val, float min, float max, uint32_t color_hex, const HaltechData_t* d) {
+static void update_ui(float val, float min, float max, uint32_t color_hex) {
     // Ring indicator: only update color based on gauge value
     static uint32_t prev_color = 0;
     if (color_hex != prev_color) {
@@ -256,9 +259,9 @@ static void update_ui(float val, float min, float max, uint32_t color_hex, const
             lv_label_set_text(peak_low_label, buf);
             strncpy(prev_low, buf, sizeof(prev_low));
         }
-    } else if (secondary_metric != 0) {
+    } else if (secondary_chan != 0) {
         char buf[28];
-        format_secondary(secondary_metric, d, buf, sizeof(buf));
+        format_secondary(secondary_chan, buf, sizeof(buf));
         if (prev_label_mode != 2) {
             lv_obj_set_style_text_align(peak_high_label, LV_TEXT_ALIGN_CENTER, 0);
             lv_obj_align(peak_high_label, LV_ALIGN_CENTER, 0, -120);
@@ -321,16 +324,11 @@ void update_gauge_master() {
         current_applied_text = text_color;
     }
 
-    // One consistent snapshot per frame — never read the decode task's struct live.
-    HaltechData_t d;
-    haltech_get(&d);
-
-    switch(current_mode) {
-      case MODE_BOOST: target_val = d.boost_psi; break;
-      case MODE_AFR: target_val = d.afr_gas; break;
-      case MODE_WATER: target_val = (float)d.water_temp_c; break;
-      case MODE_OIL: target_val = d.oil_press_psi; break;
-    }
+    // The active mode reads its bound registry channel, converted to the
+    // configured display units (ranges/zones are entered in display units too).
+    const ModeConfig& mc0 = behavior.mode[current_mode];
+    int chan_idx = chan_index_from_key(mc0.chan_key);
+    target_val = chan_display(chan_idx, haltech_value(chan_idx));
 
     // On a live mode change, jump straight to the new metric instead of sweeping.
     if (snap_displayed) { displayed_val = target_val; snap_displayed = false; }
@@ -401,5 +399,5 @@ void update_gauge_master() {
       lv_obj_align(val_label_dec, LV_ALIGN_CENTER, ANCHOR_OFS + dec_w / 2, 5);
     }
 
-    update_ui(displayed_val, mc.min, mc.max, color_hex, &d);
+    update_ui(displayed_val, mc.min, mc.max, color_hex);
 }

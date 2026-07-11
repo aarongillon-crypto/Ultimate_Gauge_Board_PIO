@@ -9,9 +9,9 @@
 // Bump FIRMWARE_VERSION on each release. FIRMWARE_BUILD is stamped automatically
 // by the compiler every build, so it always changes even if the version is not
 // bumped -- use it to confirm an OTA upload actually took effect.
-#define FIRMWARE_VERSION "2.0.0"
+#define FIRMWARE_VERSION "2.1.0"
 #define FIRMWARE_VER_MAJOR 2
-#define FIRMWARE_VER_MINOR 0
+#define FIRMWARE_VER_MINOR 1
 #define FIRMWARE_VER_PATCH 0
 #define FIRMWARE_BUILD   __DATE__ " " __TIME__
 
@@ -19,14 +19,15 @@
 enum GaugeMode { MODE_BOOST=0, MODE_AFR=1, MODE_WATER=2, MODE_OIL=3 };
 enum DisplayPage { PAGE_GAUGE = 0, PAGE_GLOWCRAFT = 1 };
 
-extern const char* MODE_NAMES[4];
-
-// --- GAUGE BEHAVIOR CONFIG (per-mode ranges/zones + dynamics) ---
-// Replaces the hardcoded RANGES table and per-mode colour if-chains. Defaults
-// (BEHAVIOR_DEFAULTS) reproduce the old behavior exactly: a fresh flash over
-// old NVS renders pixel-identically. z1/z2 outside [min,max] = always-mid.
-struct ModeConfig  { float min, max;   // gauge sweep range
-                     float z1, z2; };  // colour zones: v<z1 low, v<z2 mid, else high
+// --- GAUGE BEHAVIOR CONFIG (per-mode channel + ranges/zones + dynamics) ---
+// Each of the 4 mode slots binds to ANY channel from the Haltech V2 registry
+// (haltech_channels.h) via its stable chan_key, with a custom display label.
+// Ranges/zones are in DISPLAY units (what the dial shows). z1/z2 outside
+// [min,max] = single-colour gauge. Defaults reproduce the classic 4 modes.
+struct ModeConfig  { uint16_t chan_key; // registry key: (can_id<<4)|byte_offset
+                     char label[14];    // gauge face label, e.g. "BOOST"
+                     float min, max;    // gauge sweep range (display units)
+                     float z1, z2; };   // colour zones: v<z1 low, v<z2 mid, else high
 struct BehaviorConfig {
   ModeConfig mode[4];
   float smoothing;        // needle smoothing factor (default 0.24)
@@ -36,13 +37,8 @@ struct BehaviorConfig {
 extern BehaviorConfig behavior;
 extern const BehaviorConfig BEHAVIOR_DEFAULTS;
 
-// --- LIVE CAN DATA ---
-typedef struct {
-  float boost_psi; float afr_gas; int rpm; int water_temp_c; float oil_press_psi;
-  int intake_air_temp_c; float oil_temp_c; float fuel_press_psi; int tps_percent;
-  int engine_load_pct; float ign_timing_deg; float baro_kpa; float fuel_temp_c;
-  float vehicle_speed_kph; int8_t gear;
-} HaltechData_t;
+// Live CAN data lives in the channel value store (haltech_decode.h), indexed
+// by the Haltech V2 channel registry — the old fixed HaltechData_t is gone.
 
 // --- THEME SLOTS ---
 struct GaugeTheme {
@@ -76,9 +72,7 @@ extern DisplayPage current_page;
 extern String device_name;              // used for AP SSID
 extern int current_brightness;
 extern uint8_t current_font;
-extern uint8_t secondary_metric;
-extern const char* SECONDARY_NAMES[];
-extern const int SECONDARY_COUNT;
+extern uint16_t secondary_chan;   // chan_key of the secondary readout (0 = none)
 
 // --- LIVE COLOURS (owned by loopTask) ---
 extern uint32_t text_color;

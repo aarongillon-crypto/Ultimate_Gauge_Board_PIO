@@ -9,9 +9,9 @@
 // Bump FIRMWARE_VERSION on each release. FIRMWARE_BUILD is stamped automatically
 // by the compiler every build, so it always changes even if the version is not
 // bumped -- use it to confirm an OTA upload actually took effect.
-#define FIRMWARE_VERSION "2.1.0"
+#define FIRMWARE_VERSION "2.2.0"
 #define FIRMWARE_VER_MAJOR 2
-#define FIRMWARE_VER_MINOR 1
+#define FIRMWARE_VER_MINOR 2
 #define FIRMWARE_VER_PATCH 0
 #define FIRMWARE_BUILD   __DATE__ " " __TIME__
 
@@ -122,3 +122,7 @@ extern volatile int32_t pending_mode;
 extern volatile int32_t pending_brightness;
 extern volatile bool snap_displayed;    // snap needle/value to target on next frame
 extern volatile uint32_t identify_end_ms;  // fleet "identify" backlight blink deadline (0 = off)
+
+// --- LAYOUT ENGINE ---
+extern bool layout_enabled;             // NVS "luse" — bootok safe-mode clears it
+extern volatile bool flag_layout_reload;// loop(): re-load stored layout (or revert to default face)

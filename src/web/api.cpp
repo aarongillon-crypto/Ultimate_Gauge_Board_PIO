@@ -4,6 +4,8 @@
 #include "../themes.h"
 #include "../fleet.h"
 #include "../haltech_decode.h"
+#include "../layout_store.h"
+#include "../ui/layout_engine.h"
 #include "CANBus_Driver.h"
 #include "Display_ST7701.h"
 #include <ArduinoJson.h>
@@ -42,6 +44,8 @@ static void apiState() {
   doc["canOk"] = canbus_ok;
   doc["uptime"] = millis() / 1000;
   doc["heap"] = ESP.getFreeHeap();
+  doc["layoutActive"] = layout_engine_active();
+  if (layout_engine_active()) doc["layoutName"] = layout_engine_name();
   // Live values for the 4 configured modes + secondary (display units).
   JsonArray live = doc["live"].to<JsonArray>();
   for (int i = 0; i < 4; i++) {
@@ -274,6 +278,33 @@ static void apiConfigSet() {
   srv->send(200, "text/plain", "OK");
 }
 
+// ---------- layout (Layout_Engine_Spec.md §8) ----------
+static void apiLayoutGet() {
+  String json = layout_store_read();
+  if (json.length() == 0) { srv->send(404, "text/plain", "No stored layout (default face active)"); return; }
+  srv->send(200, "application/json", json);
+}
+
+// POST /api/layout — validate BEFORE persisting; the current layout (or the
+// default face) is untouched on any failure. Success re-enables layouts if
+// bootok safe-mode had disabled them, and stages a rebuild in loop().
+static void apiLayoutSet() {
+  String body = srv->arg("plain");
+  if (body.length() == 0 || body.length() > 16384) { srv->send(400, "text/plain", "Bad body size (max 16KB)"); return; }
+  String err;
+  if (!layout_validate(body, err)) { srv->send(400, "text/plain", err); return; }
+  if (!layout_store_write(body)) { srv->send(500, "text/plain", "Storage write failed"); return; }
+  if (!layout_enabled) { layout_enabled = true; cfg_put_bool("luse", true); }
+  flag_layout_reload = true;
+  srv->send(200, "text/plain", "OK");
+}
+
+static void apiLayoutDelete() {
+  layout_store_delete();
+  flag_layout_reload = true;   // no file -> loop reverts to the default face
+  srv->send(200, "text/plain", "OK");
+}
+
 // ---------- fleet ----------
 static void apiFleet() {
   PeerGauge peers[10];
@@ -440,6 +471,9 @@ void api_register(WebServer& server) {
   server.on(UriBraces("/api/themes/{}"), HTTP_POST, apiThemeSet);
   server.on(UriBraces("/api/themes/{}/activate"), HTTP_POST, apiThemeActivate);
   server.on(UriBraces("/api/themes/{}/copy"), HTTP_POST, apiThemeCopy);
+  server.on("/api/layout", HTTP_GET, apiLayoutGet);
+  server.on("/api/layout", HTTP_POST, apiLayoutSet);
+  server.on("/api/layout", HTTP_DELETE, apiLayoutDelete);
   server.on("/api/channels", HTTP_GET, apiChannels);
   server.on("/api/config", HTTP_GET, apiConfigGet);
   server.on("/api/config", HTTP_POST, apiConfigSet);

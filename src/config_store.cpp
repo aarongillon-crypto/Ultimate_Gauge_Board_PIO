@@ -173,6 +173,7 @@ bool cfg_load_all(const char* defaultName) {
   current_page = (DisplayPage)preferences.getUInt("page", 0);
   active_theme = (uint8_t)preferences.getUInt("atheme", 0);
   trimpot_theme_sync = preferences.getBool("tpsync", false);
+  layout_enabled = preferences.getBool("luse", true);
   // Crash-safe boot flag: set false before risky rendering, true once we light
   // the panel. If it's still false here, the previous boot crashed/hung mid-render.
   bool last_boot_completed = preferences.getBool("bootok", true);

@@ -15,9 +15,11 @@
 #include "fleet.h"
 #include "can_rx.h"
 #include "haltech_decode.h"
+#include "layout_store.h"
 #include "ui/render_shared.h"
 #include "ui/gauge_page.h"
 #include "ui/glowcraft_page.h"
+#include "ui/layout_engine.h"
 #include "web/web_server.h"
 #include "CANBus_Driver.h"
 #include "GlowCraft_Driver.h"
@@ -94,11 +96,20 @@ void setup() {
   // the panel ever lights. Because that happens before loop() runs, OTA can't
   // recover it. If the last boot didn't complete, disable the active slot's
   // gradient and persist it so we boot clean instead of crash-looping.
+  layout_store_init();   // LittleFS on the (previously unused) spiffs partition
+
   if (!last_boot_completed) {
     Serial.println("[SAFE] Previous boot did not complete — disabling gradient (safe mode)");
     bg_grad_type = 0;
     themes[active_theme].bg_grad_type = 0;
     cfg_disable_gradient(active_theme);
+    // A stored layout could equally be the crasher — disable it too. The web
+    // API re-enables on the next successful POST /api/layout.
+    if (layout_enabled && layout_store_present()) {
+      Serial.println("[SAFE] Disabling stored layout — default face this boot");
+      layout_enabled = false;
+      cfg_put_bool("luse", false);
+    }
   }
   // Mark boot as in-progress; cleared at the end of setup() once we've rendered
   // and lit the backlight. A crash before then leaves this false -> safe mode.
@@ -107,7 +118,9 @@ void setup() {
   gauge_scr = lv_scr_act();   // the default screen holds the gauge UI
   setup_wifi();               // bring up AP + web server + OTA BEFORE any risky
                               // rendering so a bad style can never lock out OTA
-  load_current_style();
+  // Stored layout (if present, enabled, and valid) replaces the built-in face;
+  // any failure falls back to the compiled-in default (never a blank screen).
+  if (!(layout_enabled && layout_engine_load())) load_current_style();
   build_glowcraft_page();
   apply_page();               // load whichever page was last selected
 
@@ -182,9 +195,19 @@ void loop() {
       }
   }
 
+  if (flag_layout_reload) {
+      flag_layout_reload = false;
+      // Re-load the stored layout; on any failure (or after DELETE) revert to
+      // the compiled-in default face.
+      if (!(layout_enabled && layout_engine_load())) {
+          layout_engine_unload();
+          load_current_style();
+      }
+  }
   if (flag_theme_update) {
       flag_theme_update = false;
-      apply_theme_colors();   // in-place colour/gradient/font update (no teardown)
+      if (layout_engine_active()) layout_engine_theme_changed();  // re-resolve theme tokens
+      else apply_theme_colors();  // in-place colour/gradient/font update (no teardown)
   }
   if (flag_bright_update) {
       flag_bright_update = false;
@@ -197,12 +220,14 @@ void loop() {
   }
   if (flag_new_peer) {
       flag_new_peer = false;
-      lv_obj_clear_flag(link_icon, LV_OBJ_FLAG_HIDDEN);
+      if (link_icon) lv_obj_clear_flag(link_icon, LV_OBJ_FLAG_HIDDEN);  // built-in face only
   }
   if (flag_stats_update) {
       flag_stats_update = false;
-      if(show_perf_stats) lv_obj_clear_flag(perf_label, LV_OBJ_FLAG_HIDDEN);
-      else lv_obj_add_flag(perf_label, LV_OBJ_FLAG_HIDDEN);
+      if (perf_label) {   // stats overlay belongs to the built-in face
+          if(show_perf_stats) lv_obj_clear_flag(perf_label, LV_OBJ_FLAG_HIDDEN);
+          else lv_obj_add_flag(perf_label, LV_OBJ_FLAG_HIDDEN);
+      }
   }
   if (flag_page_update) {
       flag_page_update = false;
@@ -215,7 +240,7 @@ void loop() {
           pending_mode = -1;
           cfg_put_int("mode", (int)current_mode);
       }
-      lv_label_set_text(mode_label, behavior.mode[current_mode].label);
+      if (mode_label) lv_label_set_text(mode_label, behavior.mode[current_mode].label);
       // Fresh state for the new metric: drop stale peaks and snap the needle so
       // it doesn't sweep across the dial from the old mode's value.
       peak_val = -999.0f; peak_low_val = 999.0f; peak_timer = millis();
@@ -223,7 +248,7 @@ void loop() {
   }
 
   // --- STATS LOGIC ---
-  if (show_perf_stats) {
+  if (show_perf_stats && perf_label) {
       perf_frames++;
       if (millis() - perf_last_time >= 1000) {
           perf_fps = perf_frames;
@@ -261,7 +286,8 @@ void loop() {
           update_glowcraft_page();
       } else {
           if (test_mode_enabled) haltech_test_inject();
-          update_gauge_master();
+          if (layout_engine_active()) layout_engine_update();
+          else update_gauge_master();
       }
 
       if(show_perf_stats) perf_frame_ms = millis() - start;

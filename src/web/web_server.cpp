@@ -199,6 +199,10 @@ void setup_wifi() {
   static const char* hdrs[] = { "If-None-Match" };
   server.collectHeaders(hdrs, 1);   // needed for ETag/304 handling
 
+  // CORS: lets the Gauge Designer (browser dev mode, different origin) call
+  // the JSON API directly. Local-AP single-user context — wildcard is fine.
+  server.enableCORS(true);
+
   // SPA assets
   server.on("/", HTTP_GET, [](){ send_asset(ASSET_INDEX_HTML_GZ, ASSET_INDEX_HTML_GZ_LEN, "text/html"); });
   server.on("/app.js", HTTP_GET, [](){ send_asset(ASSET_APP_JS_GZ, ASSET_APP_JS_GZ_LEN, "application/javascript"); });
@@ -213,6 +217,18 @@ void setup_wifi() {
   server.on("/otafallback", handleOTAFallback);
   server.on("/ota", HTTP_GET, handleOTAPage);
   server.on("/ota", HTTP_POST, handleOTADone, handleOTAUpload);
+
+  // Preflight (OPTIONS) for cross-origin POST/DELETE with a JSON body —
+  // enableCORS only decorates normal responses, it doesn't answer preflights.
+  server.onNotFound([]() {
+    if (server.method() == HTTP_OPTIONS) {
+      server.sendHeader("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS");
+      server.sendHeader("Access-Control-Allow-Headers", "Content-Type");
+      server.send(204);
+    } else {
+      server.send(404, "text/plain", "Not found");
+    }
+  });
   server.begin();
 
   // ArduinoOTA — allows PlatformIO upload direct over WiFi

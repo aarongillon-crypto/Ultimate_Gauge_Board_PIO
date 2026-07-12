@@ -1,0 +1,36 @@
+{
+  "schema": "ugb-layout",
+  "v": 1,
+  "meta": { "name": "M1.5 Features" },
+  "canvas": { "w": 480, "h": 480, "round": true },
+  "start_page": 0,
+  "pages": [
+    {
+      "id": 0,
+      "name": "Main",
+      "bg": { "type": "solid", "color": "#000000" },
+      "elements": [
+        {
+          "type": "shape", "shape": "line",
+          "points": [[120, 240], [360, 240]],
+          "stroke": "#2A2E36", "stroke_w": 2
+        },
+        {
+          "type": "numeric", "chan": 13826, "x": 240, "y": 200, "align": "center",
+          "font": "dseg14_120", "decimals": 1, "color": "#FFD700",
+          "stale_ms": 1500
+        },
+        {
+          "type": "text", "x": 240, "y": 300, "align": "center", "str": "BOOST",
+          "font": "montserrat_28", "color": "#969696"
+        },
+        {
+          "type": "warning", "chan": 13826, "x": 240, "y": 380, "align": "center",
+          "font": "montserrat_28", "on_str": "HIGH BOOST", "on_color": "#FF3B30",
+          "off_hidden": true,
+          "visible_if": { "chan": 13826, "op": ">", "value": 15 }
+        }
+      ]
+    }
+  ]
+}

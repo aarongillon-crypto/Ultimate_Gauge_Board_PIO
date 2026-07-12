@@ -55,6 +55,13 @@ struct LeElement {
   uint8_t  stroke_w;
   const lv_font_t* font;
   char     str[LE_STR_MAX];   // text / warning on_str / numeric prefix
+  // visibility gates (spec §3.3)
+  int16_t  vis_chan_idx;      // visible_if channel, -1 = none
+  uint8_t  vis_op;            // OP_*
+  float    vis_value;
+  uint16_t stale_ms;          // hide when bound channel older than this (0 = off)
+  uint8_t  n_pts;             // shape:"line" — point count (0 = rect/circle)
+  int8_t   prev_shown;        // gate cache: -1 unknown, 0 hidden, 1 shown
   // LVGL handles + dirty caches
   lv_obj_t* obj;
   lv_obj_t* obj2;
@@ -64,6 +71,8 @@ struct LeElement {
   int32_t  prev_a, prev_b;    // needle endpoints hash / bar fill px / visibility
 };
 
+enum { OP_GT, OP_LT, OP_GE, OP_LE, OP_EQ, OP_NE, OP_TRUTHY };
+
 static LeElement s_el[LE_MAX_ELEMENTS];
 static int s_count = 0;
 static bool s_active = false;
@@ -72,6 +81,11 @@ static int s_page_count = 1;   // pages in the active layout
 static int s_active_page = 0;  // index of the built page
 static char s_bg_json[160] = "";       // background spec kept for theme rebuilds
 static lv_grad_dsc_t s_bg_grad;        // style keeps a pointer — must persist
+// Persistent point storage for shape:"line" (lv_line keeps a pointer, doesn't
+// copy). Raw parsed points; converted to lv_point_precise_t at build.
+#define LE_MAX_LINE_PTS 8
+static int16_t s_pts[LE_MAX_ELEMENTS][LE_MAX_LINE_PTS][2];
+static lv_point_precise_t s_line_lv[LE_MAX_ELEMENTS][LE_MAX_LINE_PTS];
 
 // ---------------- colour helpers ----------------
 static const char* TOKEN_ROLES[] = { "text", "low", "mid", "high", "bg",
@@ -142,8 +156,25 @@ static bool parse_page_elements(JsonObjectConst page, const char* meta_name, boo
     LeElement& el = out ? out[n] : tmp;
     el = {};
     el.chan_idx = -1;
+    el.vis_chan_idx = -1;
+    el.prev_shown = -1;
     el.disp = NAN;
     const char* type = e["type"] | "";
+
+    // Common visibility gates (any element type). visible_if.chan must be a
+    // valid scalar channel (bit channels aren't key-addressable).
+    JsonObjectConst vi = e["visible_if"];
+    if (!vi.isNull()) {
+      long vk = vi["chan"] | 0L;
+      el.vis_chan_idx = (int16_t)chan_index_from_key((uint16_t)vk);
+      if (el.vis_chan_idx < 0) { err = String("visible_if unknown chan ") + vk; return false; }
+      const char* op = vi["op"] | "truthy";
+      el.vis_op = strcmp(op, ">") == 0 ? OP_GT : strcmp(op, "<") == 0 ? OP_LT
+                : strcmp(op, ">=") == 0 ? OP_GE : strcmp(op, "<=") == 0 ? OP_LE
+                : strcmp(op, "==") == 0 ? OP_EQ : strcmp(op, "!=") == 0 ? OP_NE : OP_TRUTHY;
+      el.vis_value = vi["value"] | 0.0f;
+    }
+    el.stale_ms = (uint16_t)constrain((long)(e["stale_ms"] | 0L), 0L, 60000L);
 
     // shared helpers
     auto getChan = [&](bool required) -> bool {
@@ -219,7 +250,26 @@ static bool parse_page_elements(JsonObjectConst page, const char* meta_name, boo
     } else if (strcmp(type, "shape") == 0) {
       el.type = LE_SHAPE;
       const char* sh = e["shape"] | "rect";
-      if (strcmp(sh, "line") == 0) { err = "shape line not supported in engine v1 spike"; return false; }
+      if (strcmp(sh, "line") == 0) {
+        JsonArrayConst pts = e["points"];
+        if (pts.isNull() || pts.size() < 2 || pts.size() > LE_MAX_LINE_PTS) {
+          err = "line needs 2..8 points"; return false;
+        }
+        el.n_pts = (uint8_t)pts.size();
+        int k = 0;
+        for (JsonArrayConst p : pts) {
+          long px = p[0] | 0L, py = p[1] | 0L;
+          if (!coord_ok(px) || !coord_ok(py)) { err = "line point out of range"; return false; }
+          if (apply) { s_pts[n][k][0] = (int16_t)px; s_pts[n][k][1] = (int16_t)py; }
+          k++;
+        }
+        el.has_stroke = true;
+        if (e["stroke"].isNull()) { el.stroke.role = -1; el.stroke.hex = 0xFFFFFF; }
+        else if (!getCol("stroke", &el.stroke, true)) return false;
+        el.stroke_w = (uint8_t)constrain((int)(e["stroke_w"] | 1), 1, 20);
+        n++;
+        continue;   // line fully parsed — skip rect/circle handling
+      }
       if (!getXY()) return false;
       el.horiz = strcmp(sh, "rect") == 0;   // reuse: horiz => rect, else circle
       el.w = (int16_t)(e["w"] | 10L); el.h = (int16_t)(e["h"] | 10L);
@@ -324,7 +374,7 @@ static void place_label(LeElement& el, const char* text) {
   lv_obj_set_pos(el.obj, x, el.y - sz.y / 2);
 }
 
-static void build_element(LeElement& el) {
+static void build_element(LeElement& el, int idx) {
   switch (el.type) {
     case LE_TEXT: {
       el.obj = lv_label_create(gauge_scr);
@@ -389,6 +439,18 @@ static void build_element(LeElement& el) {
       break;
     }
     case LE_SHAPE: {
+      if (el.n_pts > 0) {   // polyline
+        el.obj = lv_line_create(gauge_scr);
+        lv_obj_set_style_line_width(el.obj, el.stroke_w, 0);
+        lv_obj_set_style_line_color(el.obj, lv_color_hex(col_val(el.stroke)), 0);
+        lv_obj_set_style_line_rounded(el.obj, 0, 0);
+        for (int k = 0; k < el.n_pts; k++) {
+          s_line_lv[idx][k].x = s_pts[idx][k][0];
+          s_line_lv[idx][k].y = s_pts[idx][k][1];
+        }
+        lv_line_set_points(el.obj, s_line_lv[idx], el.n_pts);
+        break;
+      }
       el.obj = lv_obj_create(gauge_scr);
       lv_obj_remove_style_all(el.obj);
       lv_obj_set_pos(el.obj, el.x, el.y);
@@ -422,7 +484,7 @@ static void build_active_scene() {
   bar = peak_dot = peak_high_label = peak_low_label = perf_label = needle_tip = nullptr;
 
   apply_layout_background();
-  for (int i = 0; i < s_count; i++) build_element(s_el[i]);
+  for (int i = 0; i < s_count; i++) build_element(s_el[i], i);
 }
 
 // Read + parse the stored layout, build one page (page_idx, or the start page
@@ -500,10 +562,53 @@ static uint32_t zone_col(const LeElement& el, float v) {
   return col_val(el.high);
 }
 
+// visible_if + stale_ms gate. Returns true if the element should be shown.
+static bool gate_shown(const LeElement& el) {
+  if (el.vis_chan_idx >= 0) {
+    bool ok;
+    if (el.vis_op == OP_TRUTHY) ok = haltech_value(el.vis_chan_idx) != 0.0f;
+    else {
+      float v = chan_display(el.vis_chan_idx, haltech_value(el.vis_chan_idx));
+      switch (el.vis_op) {
+        case OP_GT: ok = v >  el.vis_value; break;
+        case OP_LT: ok = v <  el.vis_value; break;
+        case OP_GE: ok = v >= el.vis_value; break;
+        case OP_LE: ok = v <= el.vis_value; break;
+        case OP_EQ: ok = v == el.vis_value; break;
+        case OP_NE: ok = v != el.vis_value; break;
+        default:    ok = true;
+      }
+    }
+    if (!ok) return false;
+  }
+  if (el.stale_ms > 0 && el.chan_idx >= 0 && haltech_age_ms(el.chan_idx) > el.stale_ms)
+    return false;
+  return true;
+}
+
 void layout_engine_update() {
   if (!s_active) return;
   for (int i = 0; i < s_count; i++) {
     LeElement& el = s_el[i];
+
+    // Visibility gates apply to EVERY element type (incl. static text/shape).
+    if (el.vis_chan_idx >= 0 || el.stale_ms > 0) {
+      int8_t shown = gate_shown(el) ? 1 : 0;
+      if (shown != el.prev_shown) {
+        el.prev_shown = shown;
+        if (shown) {
+          lv_obj_clear_flag(el.obj, LV_OBJ_FLAG_HIDDEN);
+          if (el.obj2) lv_obj_clear_flag(el.obj2, LV_OBJ_FLAG_HIDDEN);
+          // invalidate per-type caches so the element repaints on re-show
+          el.prev_a = el.prev_b = INT32_MIN; el.prev_col = 0; el.prev_txt[0] = '\x01'; el.prev_txt[1] = '\0';
+        } else {
+          lv_obj_add_flag(el.obj, LV_OBJ_FLAG_HIDDEN);
+          if (el.obj2) lv_obj_add_flag(el.obj2, LV_OBJ_FLAG_HIDDEN);
+        }
+      }
+      if (!shown) continue;   // hidden — skip the per-type update
+    }
+
     if (el.chan_idx < 0) continue;
     float display = chan_display(el.chan_idx, haltech_value(el.chan_idx));
 

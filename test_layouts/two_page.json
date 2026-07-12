@@ -1,0 +1,57 @@
+{
+  "schema": "ugb-layout",
+  "v": 1,
+  "meta": { "name": "Two Page Test" },
+  "canvas": { "w": 480, "h": 480, "round": true },
+  "start_page": 0,
+  "pages": [
+    {
+      "id": 0,
+      "name": "Boost",
+      "bg": { "type": "solid", "color": "#000000" },
+      "elements": [
+        {
+          "type": "ring", "chan": 13826, "min": -15, "max": 30, "z1": 0, "z2": 20,
+          "cx": 240, "cy": 240, "r": 240, "width": 16,
+          "low": "#2196F3", "mid": "#4CAF50", "high": "#F44336"
+        },
+        {
+          "type": "needle", "chan": 13826, "min": -15, "max": 30,
+          "cx": 240, "cy": 240, "r0": 185, "r1": 225,
+          "start_deg": 135, "sweep_deg": 270, "width": 8, "color": "#FF6600"
+        },
+        {
+          "type": "numeric", "chan": 13826, "x": 240, "y": 245, "align": "center",
+          "font": "dseg14_120", "decimals": 1, "color": "#FFD700"
+        },
+        {
+          "type": "text", "x": 240, "y": 406, "align": "center", "str": "BOOST",
+          "font": "montserrat_28", "color": "#969696"
+        }
+      ]
+    },
+    {
+      "id": 1,
+      "name": "Temps",
+      "bg": { "type": "solid", "color": "#0A0800" },
+      "elements": [
+        {
+          "type": "numeric", "chan": 15872, "x": 240, "y": 180, "align": "center",
+          "font": "dseg14_96", "decimals": 0, "unit": true, "color": "#00C851"
+        },
+        {
+          "type": "text", "x": 240, "y": 250, "align": "center", "str": "WATER",
+          "font": "montserrat_20", "color": "#969696"
+        },
+        {
+          "type": "numeric", "chan": 13842, "x": 240, "y": 320, "align": "center",
+          "font": "dseg14_96", "decimals": 0, "unit": true, "color": "#FF8A00"
+        },
+        {
+          "type": "text", "x": 240, "y": 390, "align": "center", "str": "OIL P",
+          "font": "montserrat_20", "color": "#969696"
+        }
+      ]
+    }
+  ]
+}

@@ -68,6 +68,8 @@ static LeElement s_el[LE_MAX_ELEMENTS];
 static int s_count = 0;
 static bool s_active = false;
 static char s_name[24] = "";
+static int s_page_count = 1;   // pages in the active layout
+static int s_active_page = 0;  // index of the built page
 static char s_bg_json[160] = "";       // background spec kept for theme rebuilds
 static lv_grad_dsc_t s_bg_grad;        // style keeps a pointer — must persist
 
@@ -107,9 +109,9 @@ static uint32_t col_val(const LeColor& c) { return c.role >= 0 ? role_color(c.ro
 // ---------------- parse + validate (spec §9) ----------------
 static bool coord_ok(long v) { return v >= -512 && v <= 1023; }
 
-// Parses `doc` into s_el/s_name (when apply=true) or just checks it.
-// err gets a short reason on failure.
-static bool parse_doc(JsonDocument& doc, bool apply, String& err) {
+// Top-level validation shared by validate/load/set_page. Reports the page
+// count and the index of the start page (by matching start_page against ids).
+static bool validate_top(JsonDocument& doc, String& err, int* page_count, int* start_idx) {
   if (strcmp(doc["schema"] | "", "ugb-layout") != 0) { err = "schema must be ugb-layout"; return false; }
   if ((int)(doc["v"] | 0) != 1) { err = "unsupported schema version"; return false; }
   JsonObjectConst canvas = doc["canvas"];
@@ -118,12 +120,16 @@ static bool parse_doc(JsonDocument& doc, bool apply, String& err) {
   }
   JsonArrayConst pages = doc["pages"];
   if (pages.isNull() || pages.size() < 1 || pages.size() > 4) { err = "need 1..4 pages"; return false; }
+  *page_count = pages.size();
+  int start_id = doc["start_page"] | 0, i = 0;
+  *start_idx = 0;
+  for (JsonObjectConst p : pages) { if ((int)(p["id"] | -1) == start_id) { *start_idx = i; break; } i++; }
+  return true;
+}
 
-  int start = doc["start_page"] | 0;
-  JsonObjectConst page;
-  for (JsonObjectConst p : pages) if ((int)(p["id"] | -1) == start) page = p;
-  if (page.isNull()) page = pages[0];
-
+// Parse/validate ONE page's elements. When apply, fills s_el/s_count/s_bg_json
+// and s_name. Assumes validate_top already passed. err gets a reason on failure.
+static bool parse_page_elements(JsonObjectConst page, const char* meta_name, bool apply, String& err) {
   JsonArrayConst els = page["elements"];
   if (els.isNull()) { err = "page has no elements array"; return false; }
   if (els.size() > LE_MAX_ELEMENTS) { err = "too many elements (max 64)"; return false; }
@@ -240,7 +246,7 @@ static bool parse_doc(JsonDocument& doc, bool apply, String& err) {
 
   if (apply) {
     s_count = n;
-    strlcpy(s_name, doc["meta"]["name"] | "", sizeof(s_name));
+    strlcpy(s_name, meta_name ? meta_name : "", sizeof(s_name));
     // Keep the background spec for rebuilds.
     s_bg_json[0] = 0;
     if (!page["bg"].isNull()) serializeJson(page["bg"], s_bg_json, sizeof(s_bg_json));
@@ -251,7 +257,16 @@ static bool parse_doc(JsonDocument& doc, bool apply, String& err) {
 bool layout_validate(const String& json, String& err) {
   JsonDocument doc;
   if (deserializeJson(doc, json) != DeserializationError::Ok) { err = "bad JSON"; return false; }
-  return parse_doc(doc, false, err);
+  int pc, si;
+  if (!validate_top(doc, err, &pc, &si)) return false;
+  // Validate EVERY page (not just the start page) so a bad far page is caught
+  // on upload rather than crashing later when the user switches to it.
+  int i = 0;
+  for (JsonObjectConst p : doc["pages"].as<JsonArrayConst>()) {
+    if (!parse_page_elements(p, nullptr, false, err)) { err = String("page ") + i + ": " + err; return false; }
+    i++;
+  }
+  return true;
 }
 
 // ---------------- build ----------------
@@ -396,23 +411,9 @@ static void build_element(LeElement& el) {
   }
 }
 
-bool layout_engine_load() {
-  layout_engine_unload();
-  String json = layout_store_read();
-  if (json.length() == 0) return false;
-
-  JsonDocument doc;
-  if (deserializeJson(doc, json) != DeserializationError::Ok) {
-    Serial.println("[LAYOUT] stored layout is not valid JSON — using default face");
-    return false;
-  }
-  String err;
-  if (!parse_doc(doc, true, err)) {
-    Serial.printf("[LAYOUT] stored layout invalid (%s) — using default face\n", err.c_str());
-    s_count = 0;
-    return false;
-  }
-
+// Tear down whatever is on gauge_scr and build the currently-parsed page
+// (s_el/s_count/s_bg_json). Runs on loopTask.
+static void build_active_scene() {
   lv_obj_clean(gauge_scr);
   // The built-in face's objects were just destroyed — null the shared handles
   // so loop()'s flag handlers (link icon, stats overlay, mode label...) and
@@ -422,9 +423,50 @@ bool layout_engine_load() {
 
   apply_layout_background();
   for (int i = 0; i < s_count; i++) build_element(s_el[i]);
+}
+
+// Read + parse the stored layout, build one page (page_idx, or the start page
+// when page_idx < 0). Returns false (and leaves s_active false) on any failure.
+static bool load_page(int page_idx) {
+  String json = layout_store_read();
+  if (json.length() == 0) return false;
+
+  JsonDocument doc;
+  if (deserializeJson(doc, json) != DeserializationError::Ok) {
+    Serial.println("[LAYOUT] stored layout is not valid JSON — using default face");
+    return false;
+  }
+  int pc, start_idx; String err;
+  if (!validate_top(doc, err, &pc, &start_idx)) {
+    Serial.printf("[LAYOUT] stored layout invalid (%s) — using default face\n", err.c_str());
+    return false;
+  }
+  int idx = (page_idx < 0) ? start_idx : page_idx;
+  if (idx < 0 || idx >= pc) return false;
+
+  JsonArrayConst pages = doc["pages"];
+  if (!parse_page_elements(pages[idx], doc["meta"]["name"] | "", true, err)) {
+    Serial.printf("[LAYOUT] page %d invalid (%s) — using default face\n", idx, err.c_str());
+    s_count = 0;
+    return false;
+  }
+  s_page_count = pc;
+  s_active_page = idx;
+  build_active_scene();
   s_active = true;
-  Serial.printf("[LAYOUT] active: \"%s\" (%d elements)\n", s_name, s_count);
+  Serial.printf("[LAYOUT] active: \"%s\" page %d/%d (%d elements)\n", s_name, idx, pc, s_count);
   return true;
+}
+
+bool layout_engine_load() {
+  layout_engine_unload();
+  return load_page(-1);   // start page
+}
+
+// Switch to a different page of the current layout (rebuilds the scene).
+bool layout_engine_set_page(int idx) {
+  if (!s_active || idx < 0 || idx >= s_page_count) return false;
+  return load_page(idx);
 }
 
 void layout_engine_unload() {
@@ -435,10 +477,12 @@ void layout_engine_unload() {
 
 bool layout_engine_active() { return s_active; }
 const char* layout_engine_name() { return s_name; }
+int layout_engine_page() { return s_active_page; }
+int layout_engine_page_count() { return s_page_count; }
 
 void layout_engine_theme_changed() {
   if (!s_active) return;
-  layout_engine_load();   // cheap for <=64 elements; re-resolves tokens + bg
+  load_page(s_active_page);   // rebuild CURRENT page: re-resolves tokens + bg
 }
 
 // ---------------- per-frame update ----------------

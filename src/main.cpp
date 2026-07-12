@@ -204,6 +204,11 @@ void loop() {
           load_current_style();
       }
   }
+  if (pending_layout_page >= 0) {   // layout page switch staged from /api/layout/page
+      int p = pending_layout_page;
+      pending_layout_page = -1;
+      layout_engine_set_page(p);
+  }
   if (flag_theme_update) {
       flag_theme_update = false;
       if (layout_engine_active()) layout_engine_theme_changed();  // re-resolve theme tokens

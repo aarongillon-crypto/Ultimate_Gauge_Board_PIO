@@ -26,6 +26,12 @@ void layout_engine_unload();
 
 bool layout_engine_active();
 const char* layout_engine_name();   // meta.name or "" — for /api/state
+int layout_engine_page();           // active page index
+int layout_engine_page_count();     // pages in the active layout
+
+// Switch the active page (rebuilds the scene). False if no layout / bad index.
+// Call from loopTask only.
+bool layout_engine_set_page(int idx);
 
 // Per-frame update of bound elements (call instead of update_gauge_master()
 // while active). Applies behavior.smoothing to bound values.

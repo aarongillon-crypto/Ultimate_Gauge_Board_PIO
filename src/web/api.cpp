@@ -45,7 +45,11 @@ static void apiState() {
   doc["uptime"] = millis() / 1000;
   doc["heap"] = ESP.getFreeHeap();
   doc["layoutActive"] = layout_engine_active();
-  if (layout_engine_active()) doc["layoutName"] = layout_engine_name();
+  if (layout_engine_active()) {
+    doc["layoutName"] = layout_engine_name();
+    doc["layoutPage"] = layout_engine_page();
+    doc["layoutPages"] = layout_engine_page_count();
+  }
   // Live values for the 4 configured modes + secondary (display units).
   JsonArray live = doc["live"].to<JsonArray>();
   for (int i = 0; i < 4; i++) {
@@ -305,6 +309,16 @@ static void apiLayoutDelete() {
   srv->send(200, "text/plain", "OK");
 }
 
+// POST /api/layout/page?p=N — switch the active layout page. Validated
+// synchronously (page count is known); the rebuild is staged to loop().
+static void apiLayoutPage() {
+  if (!layout_engine_active()) { srv->send(409, "text/plain", "No layout active"); return; }
+  int p = srv->hasArg("p") ? srv->arg("p").toInt() : -1;
+  if (p < 0 || p >= layout_engine_page_count()) { srv->send(400, "text/plain", "Bad page index"); return; }
+  pending_layout_page = p;
+  srv->send(200, "text/plain", String(p));
+}
+
 // ---------- fleet ----------
 static void apiFleet() {
   PeerGauge peers[10];
@@ -474,6 +488,7 @@ void api_register(WebServer& server) {
   server.on("/api/layout", HTTP_GET, apiLayoutGet);
   server.on("/api/layout", HTTP_POST, apiLayoutSet);
   server.on("/api/layout", HTTP_DELETE, apiLayoutDelete);
+  server.on("/api/layout/page", HTTP_POST, apiLayoutPage);
   server.on("/api/channels", HTTP_GET, apiChannels);
   server.on("/api/config", HTTP_GET, apiConfigGet);
   server.on("/api/config", HTTP_POST, apiConfigSet);

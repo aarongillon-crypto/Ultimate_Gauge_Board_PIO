@@ -71,3 +71,4 @@ volatile uint32_t identify_end_ms = 0;
 
 bool layout_enabled = true;
 volatile bool flag_layout_reload = false;
+volatile int32_t pending_layout_page = -1;

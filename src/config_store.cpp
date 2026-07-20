@@ -161,6 +161,9 @@ bool cfg_load_all(const char* defaultName) {
   bg_grad_stops = preferences.getUChar("cgs", 2);
   bg_grad_angle = preferences.getUShort("cga", 0);
   current_brightness = preferences.getInt("bright", 40);
+  dim_brightness = preferences.getInt("dimbr", 20);
+  dim_can_enabled = preferences.getBool("dimen", false);
+  dim_source = preferences.getUChar("dimsrc", DIM_SRC_EITHER);
   peak_hold_enabled = preferences.getBool("peak", true);
   debug_mode_enabled = preferences.getBool("dbg", false);
   current_font = (uint8_t)preferences.getUInt("font", 0);

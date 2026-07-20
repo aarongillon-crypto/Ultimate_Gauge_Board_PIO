@@ -24,6 +24,9 @@ GaugeMode current_mode = MODE_BOOST;
 DisplayPage current_page = PAGE_GAUGE;
 String device_name = "Gauge";
 int current_brightness = 40;
+int dim_brightness = 20;
+bool dim_can_enabled = false;
+uint8_t dim_source = DIM_SRC_EITHER;
 uint8_t current_font = 0;
 uint16_t secondary_chan = 0;   // chan_key, 0 = none
 

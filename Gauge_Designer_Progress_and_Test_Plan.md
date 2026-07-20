@@ -53,6 +53,8 @@ Firmware branch is **2 commits ahead of origin** (`v2.3.0`, `v2.4.0` unpushed). 
 - **Designer text fidelity** uses the real font cuts but LVGL's exact glyph metrics may differ by a pixel or two; the device is the source of truth.
 - **Theme tokens** render as preview colours in the Designer but are read-only in the inspector (edit via JSON for now).
 - **The split int/dec numeric** of the original built-in face isn't expressible in Schema v1 (single `numeric` used instead).
+- **Gradient backgrounds roughly halve frame rate.** A radial/conical gradient background renders correctly and crash-free (the 96K PSRAM pool covers it), but measured **~30 → ~15 fps** on the bench (v2.4.0, 2026-07-17). This is a real authoring trade-off, not a bug — **the Designer should warn** that a gradient bg is expensive; prefer a solid/theme background where high FPS matters. Solid/theme backgrounds hold the ~30 fps baseline.
+- **Designer "Live" mode should not be used against a live ECU** until the `/api/live` fix (see §7) lands: polling `/api/channels` at 1 Hz under live CAN fragments the gauge's internal heap and wedges its web server until reboot. Use **Test Mode** as the data source for Live-mode preview; the live-render path itself is validated. (Details in §7.)
 
 ---
 
@@ -182,8 +184,8 @@ Deploy `m15_features.json`, Test Mode on.
 ### Suite I — Performance
 
 - [ ] **I1 FPS.** With a layout active + Test Mode + Stats overlay… (note: the stats overlay belongs to the built-in face, so read FPS via the built-in face, or via serial timing). Target: comparable to the ~30 fps baseline; a layout of ≤ a dozen elements should not regress it.
-- [ ] **I2 Gradient cost.** A layout using a radial/conical background is the heavy case — confirm it renders without the old TLSF/heap crash (the 96K PSRAM pool covers it) and note any FPS drop.
-- [ ] **I3 Memory ceiling.** Deploy a max-ish layout (near 64 elements / 4 pages) → no `lv_malloc` failures, heap stable.
+- [x] **I2 Gradient cost.** A layout using a radial/conical background is the heavy case — confirm it renders without the old TLSF/heap crash (the 96K PSRAM pool covers it) and note any FPS drop. **RESULT (v2.4.0, 2026-07-17):** renders crash-free ✅ but FPS drops **~30 → ~15** (roughly halved). Acceptable; logged as a known limitation (§1.5) + Designer authoring warning.
+- [ ] **I3 Memory ceiling.** Deploy a max-ish layout (near 64 elements / 4 pages) → no `lv_malloc` failures, heap stable. **N/A (2026-07-17)** — deferred as an unrealistic ceiling; near-64-element/4-page layouts aren't a real-world case. Revisit only if a real design approaches the cap.
 
 ---
 
@@ -219,3 +221,21 @@ Recoverable via DELETE / power-cycle / OTA? :
 | Date | Note |
 |---|---|
 | 2026-07-12 | Initial progress + test plan (covers firmware v2.1.0–v2.4.0, Designer through M1.5). |
+| 2026-07-17 | **v2.4.0 bench-validation run.** Suites A–H pass; I1 pass, I2 pass (crash-free, ~30→15 fps on gradient bg — logged §1.5), I3 N/A (deferred). One deferred bug found: Designer "Live" mode wedges the web server under live CAN (§7). Exit criteria (§4) otherwise met. |
+| 2026-07-17 | **v2.5.0 built (not yet flashed).** Implements §7 fix (approach B: streamed `GET /api/live` + Designer repointed off `/api/channels`). Adds **CAN Park-Light screen dimming**: opt-in web toggle + undimmed/dimmed brightness sliders; dims while Haltech Park Light (`0x6F4` b0) is on, fail-safe to undimmed if CAN goes stale (~2 s). Firmware compiles, Designer typechecks. Needs the v2.5.0 bench-test before it can be called validated. |
+| 2026-07-18 | **v2.6.0 built (not yet flashed).** Adds a **GlowCraft signals frame** (`0x510`, digital vehicle inputs — park bit consumed today, rest reserved) so GlowCraft can supply a park-light signal the Haltech bus can't. Dimming gains a **configurable park source** (Haltech / GlowCraft / Either, default Either) via a new web selector. v2.5.0 flashed & informally confirmed good ("2.5 looks good") — formal v2.5.0/v2.6.0 bench-test still pending. |
+| 2026-07-19 | **v2.6.1 built + flashed.** Adds a **non-Haltech CAN sniffer** (`GET /api/cansniff` + web "CAN Sniffer" card, streamed/heap-safe) to reverse-engineer third-party frames. Used it to correct the GlowCraft signals frame: v2.6.0's guess (`0x510`, park=byte0 b0) was wrong — the GlowCraft's "Send CAN Status" layout is **fixed by its firmware** (we only pick the ID). Real frame = **`0x520`**, park = **byte0 b5 (`0x20`)**: idle `0xC0` → park-on `0xE0`. Driver updated (`GLOWCRAFT_SIGNAL_CAN`=0x520, `GC_SIG_PARK`=0x20). GlowCraft park-source dimming now functional on the bench. |
+
+---
+
+## 7. Deferred: Designer "Live" mode wedges the gauge web server under live CAN
+
+**Status:** ✅ **fix implemented (approach B) in firmware v2.5.0 — pending flash + bench validation.** Root cause confirmed; below is retained for context. Until v2.5.0 is flashed and validated, the v2.4.0 workaround (use Test Mode) still applies.
+
+**Symptom.** With a gauge connected and **live CAN data present**, turning on **Live mode in the Gauge Designer** makes the gauge's web server *and* web UI refuse all new connections (immediate error, not a hang). Only a **reboot** recovers it. The panel keeps rendering normally throughout — it is **not** a firmware crash.
+
+**Root cause.** Designer Live polls `GET /api/channels` every 1000 ms (`Gauge_Designer/src/main.ts`). The firmware handler `apiChannels()` (`src/web/api.cpp`) builds a single ~19 KB `JsonDocument` + ~19 KB output `String` for all 212 channels, and for every *seen* channel adds `val` via a transient `String(chan_display(...),2)` (~200 short-lived allocations per poll). All on **internal heap** (the scarce resource). It only bites under live CAN because unseen channels (`age == UINT32_MAX`) skip the `val`/`age` fields, so with no bus the payload is small. The per-second churn fragments internal heap until lwip can't allocate a contiguous PCB block → connections refused until reboot.
+
+**Chosen fix — approach B (both repos).** Add a compact, **streamed** `GET /api/live` returning only `[key, val, age]` for *seen* channels (bounded heap, small payload); repoint the Designer's 1 Hz Live poll at it; keep `/api/channels` for the one-time registry/metadata fetch. (Approach A — stream `/api/channels` itself — was considered; B is preferred for the smaller payload and cleaner metadata/values split.)
+
+**Workaround until fixed.** Use **Test Mode** (not a live ECU) as the data source for Designer Live preview, or reboot to clear a wedge.

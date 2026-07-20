@@ -9,10 +9,10 @@
 // Bump FIRMWARE_VERSION on each release. FIRMWARE_BUILD is stamped automatically
 // by the compiler every build, so it always changes even if the version is not
 // bumped -- use it to confirm an OTA upload actually took effect.
-#define FIRMWARE_VERSION "2.4.0"
+#define FIRMWARE_VERSION "2.6.2"
 #define FIRMWARE_VER_MAJOR 2
-#define FIRMWARE_VER_MINOR 4
-#define FIRMWARE_VER_PATCH 0
+#define FIRMWARE_VER_MINOR 6
+#define FIRMWARE_VER_PATCH 2
 #define FIRMWARE_BUILD   __DATE__ " " __TIME__
 
 // --- MODES / PAGES ---
@@ -70,7 +70,12 @@ extern bool debug_mode_enabled;
 extern GaugeMode current_mode;
 extern DisplayPage current_page;
 extern String device_name;              // used for AP SSID
-extern int current_brightness;
+extern int current_brightness;          // "undimmed" backlight level (10..100)
+extern int dim_brightness;              // NVS "dimbr" — backlight level when CAN-dimmed
+extern bool dim_can_enabled;            // NVS "dimen" — enable Park-Light CAN dimming
+// Which bus supplies the park-light signal that drives dimming.
+enum DimSource : uint8_t { DIM_SRC_HALTECH = 0, DIM_SRC_GLOWCRAFT = 1, DIM_SRC_EITHER = 2 };
+extern uint8_t dim_source;              // NVS "dimsrc" — DimSource (default EITHER)
 extern uint8_t current_font;
 extern uint16_t secondary_chan;   // chan_key of the secondary readout (0 = none)
 

@@ -3,6 +3,8 @@
 
 // Strip registry — the single source of truth for layout & CAN mapping.
 // can_id is filled in glowcraft_init() as GLOWCRAFT_CAN_BASE + index.
+GlowCraftSignals glowcraft_signals = { 0, 0, 0 };
+
 GlowCraftStrip glowcraft_strips[GC_STRIP_COUNT] = {
   // name              pixels installed
   { "Front",            30,   true  },
@@ -24,10 +26,19 @@ void glowcraft_init(void) {
     s->state        = GC_STATE_OFF;
     s->last_seen_ms = 0;  // never seen
   }
+  glowcraft_signals.lighting = 0;
+  glowcraft_signals.vehicle  = 0;
+  glowcraft_signals.last_seen_ms = 0;  // never seen
 }
 
 bool glowcraft_decode(const twai_message_t* msg) {
   uint32_t id = msg->identifier;
+  if (id == GLOWCRAFT_SIGNAL_CAN) {   // digital signals frame (0x520)
+    glowcraft_signals.lighting     = msg->data_length_code > 0 ? msg->data[0] : 0;
+    glowcraft_signals.vehicle      = msg->data_length_code > 1 ? msg->data[1] : 0;
+    glowcraft_signals.last_seen_ms = millis();
+    return true;
+  }
   if (id < GLOWCRAFT_CAN_BASE || id >= (GLOWCRAFT_CAN_BASE + GC_STRIP_COUNT)) {
     return false;  // not one of ours
   }
@@ -47,6 +58,13 @@ bool glowcraft_strip_online(int idx, uint32_t now_ms) {
   uint32_t seen = glowcraft_strips[idx].last_seen_ms;
   if (seen == 0) return false;  // never seen
   return (now_ms - seen) < GLOWCRAFT_OFFLINE_TIMEOUT_MS;
+}
+
+bool glowcraft_park_active(uint32_t now_ms) {
+  uint32_t seen = glowcraft_signals.last_seen_ms;
+  if (seen == 0) return false;                                 // never seen
+  if ((now_ms - seen) >= GLOWCRAFT_OFFLINE_TIMEOUT_MS) return false;  // stale -> fail-safe off
+  return (glowcraft_signals.lighting & GC_SIG_PARK) != 0;
 }
 
 uint32_t glowcraft_strip_color(int idx, uint32_t now_ms) {

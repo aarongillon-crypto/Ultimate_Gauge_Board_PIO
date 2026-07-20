@@ -8,6 +8,7 @@ var chansCache = [];      // /api/channels payload (registry + live values)
 var cfgCache = null;      // /api/config payload
 var editing = -1;         // slot open in the editor, -1 = closed
 var liveOpen = false;
+var sniffOpen = false;
 
 function $(id){ return document.getElementById(id); }
 function toast(msg, err){
@@ -33,6 +34,9 @@ function renderState(s){
   $('chipslot').textContent = 'P' + s.slot + (s.tpsync ? ' ⟲' : '');
   $('chipcan').textContent = s.canOk ? 'OK' : 'DOWN';
   $('brval').textContent = s.bright; $('bright').value = s.bright;
+  $('dimval').textContent = s.dimBright; $('dimbright').value = s.dimBright;
+  setTgl('dimen', 'Dim on Park Light', s.dimEn);
+  if (document.activeElement !== $('dimsrc')) $('dimsrc').value = s.dimSrc;
   setTgl('test', 'Test', s.test); setTgl('stats', 'Stats', s.stats);
   setTgl('dbg', 'Debug', s.dbg); setTgl('peak', 'Peak Hold', s.peak);
   $('font').textContent = 'Font: ' + (s.font === 0 ? 'DSEG14' : 'Fira Mono');
@@ -258,6 +262,28 @@ function toggleLive(){
   if (liveOpen) loadChannels();
 }
 
+// ---------- CAN sniffer (non-Haltech frames) ----------
+function renderSniff(d){
+  var rows = (d && d.sniff) || [];
+  if (!rows.length) { $('sniffchans').innerHTML = '<small>No non-Haltech frames seen yet.</small>'; return; }
+  rows.sort(function(a, b){ return a.id - b.id; });
+  $('sniffchans').innerHTML = rows.map(function(f){
+    var hx = (f.d || '').replace(/(..)/g, '$1 ').trim();
+    var id = '0x' + f.id.toString(16).toUpperCase() + (f.ext ? 'x' : '');
+    var lbl = f.lbl ? ' <span style="opacity:.6;font-weight:normal">' + f.lbl + '</span>' : '';
+    var stale = f.age > 3000;
+    return '<div class="crow" style="margin:2px 0' + (stale ? ';opacity:.45' : '') + '">'
+      + '<span>' + id + lbl + '</span><b>' + (hx || '—') + '</b></div>';
+  }).join('');
+}
+function loadSniff(){ return jget('/api/cansniff').then(renderSniff).catch(function(){}); }
+function toggleSniff(){
+  sniffOpen = !sniffOpen;
+  $('sniffchans').classList.toggle('hidden', !sniffOpen);
+  $('sniffbtn').textContent = sniffOpen ? 'Hide non-Haltech CAN frames' : 'Show non-Haltech CAN frames';
+  if (sniffOpen) loadSniff();
+}
+
 // ---------- fleet ----------
 function renderFleet(f){
   if (!f.peers.length) { $('fleet').innerHTML = '<small>No peers seen yet.</small>'; return; }
@@ -302,4 +328,5 @@ function loadFleet(){ return jget('/api/fleet').then(renderFleet).catch(function
   setInterval(refreshState, 3000);
   setInterval(loadFleet, 5000);
   setInterval(function(){ if (liveOpen) loadChannels(); }, 2000);
+  setInterval(function(){ if (sniffOpen) loadSniff(); }, 1000);
 })();

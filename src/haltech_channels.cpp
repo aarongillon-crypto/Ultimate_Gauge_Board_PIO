@@ -3,7 +3,12 @@
 // conventions. Skipped for now (add rows as needed): 0x3E4/0x473 switch
 // bit-matrices (except CEL/battery light), 0x370 combined-gear (redundant
 // with 0x470), 0x472/0x477/0x6F8 secondary enums, 0x6F7 generic-output
-// bitfield, 0x700 PDM multiplex.
+// bitfield, 0x700 R5-PDM output multiplex (decoded by the Multiplexed CAN doc).
+//
+// NOTE: IDs seen on the bus that are NOT in this table are Nexus peripheral
+// devices (IO16 0x6A8+, PD16 0x6Dx, inputs on 0x33x) or third-party frames, not
+// ECU broadcast channels. Full observed bus map, the multiplexed-frame decode,
+// and how to identify unknowns: see Haltech_CAN_Bus_Reference.md in the repo root.
 #include "haltech_channels.h"
 
 #define BYTE_ALIGNED 0xFF, 0
@@ -291,6 +296,15 @@ uint16_t chan_key(int index) {
   const HaltechChannel& c = HALTECH_CHANNELS[index];
   if (c.bit_start != 0xFF) return 0;   // bit channels are not key-addressable
   return CHAN_KEY(c.can_id, c.offset);
+}
+
+int chan_index_by_idbit(uint16_t can_id, uint8_t offset, uint8_t bit_start) {
+  for (int i = 0; i < HALTECH_CHANNEL_COUNT; i++) {
+    const HaltechChannel& c = HALTECH_CHANNELS[i];
+    if (c.bit_start != 0xFF && c.can_id == can_id && c.offset == offset && c.bit_start == bit_start)
+      return i;
+  }
+  return -1;
 }
 
 // ---------------- display units ----------------

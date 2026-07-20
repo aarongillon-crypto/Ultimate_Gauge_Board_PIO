@@ -34,6 +34,34 @@ static unsigned long debug_last_print = 0;
 static unsigned long last_data_time = 0;
 static unsigned long last_broadcast = 0;
 
+// --- CAN Park-Light screen dimming ---
+// Dim the backlight while the Haltech "Park Light" bit (0x6F4 b0) is on, when
+// the feature is enabled. Fail-safe: if the frame goes stale (bus dropped) we
+// treat the light as off and return to the undimmed level, so a dead bus never
+// leaves the screen stuck dim. Park Light is a bit channel (no chan_key), so we
+// resolve its registry index once via chan_index_by_idbit and read it directly.
+#define PARK_STALE_MS 2000
+static int park_light_idx = -2;   // -2 = not yet resolved, -1 = channel absent
+// Haltech Park Light bit (0x6F4 b0), fresh + on.
+static bool haltech_park_active() {
+  if (park_light_idx == -2) park_light_idx = chan_index_by_idbit(0x6F4, 0, 0);
+  if (park_light_idx < 0) return false;
+  return haltech_age_ms(park_light_idx) <= PARK_STALE_MS &&
+         haltech_value(park_light_idx) != 0.0f;
+}
+// Park active per the selected source (Haltech / GlowCraft / either), OR-combined.
+static bool compute_park_dim() {
+  if (!dim_can_enabled) return false;
+  bool on = false;
+  if (dim_source == DIM_SRC_HALTECH   || dim_source == DIM_SRC_EITHER) on |= haltech_park_active();
+  if (dim_source == DIM_SRC_GLOWCRAFT || dim_source == DIM_SRC_EITHER) on |= glowcraft_park_active(millis());
+  return on;
+}
+// Backlight level to actually drive right now (dimmed vs undimmed).
+static int effective_brightness() {
+  return compute_park_dim() ? dim_brightness : current_brightness;
+}
+
 static const char* reset_reason_str(esp_reset_reason_t r) {
   switch (r) {
     case ESP_RST_POWERON:   return "POWER_ON";
@@ -189,9 +217,21 @@ void loop() {
   if (identify_end_ms) {
       if ((int32_t)(millis() - identify_end_ms) >= 0) {
           identify_end_ms = 0;
-          set_backlight(current_brightness);
+          set_backlight(effective_brightness());   // restore to dimmed OR undimmed
       } else {
           set_backlight(((millis() / 150) & 1) ? current_brightness : 10);
+      }
+  }
+
+  // CAN Park-Light dimming: re-apply the backlight whenever the dim state flips.
+  // The identify blink owns the backlight while active, so skip until it ends
+  // (its own restore above re-applies the correct level).
+  {
+      static bool last_dim = false;
+      bool d = compute_park_dim();
+      if (d != last_dim) {
+          last_dim = d;
+          if (!identify_end_ms) set_backlight(effective_brightness());
       }
   }
 
@@ -221,7 +261,7 @@ void loop() {
           pending_brightness = -1;
           cfg_put_int("bright", current_brightness);
       }
-      set_backlight(current_brightness);
+      set_backlight(effective_brightness());   // honour active CAN dim state
   }
   if (flag_new_peer) {
       flag_new_peer = false;

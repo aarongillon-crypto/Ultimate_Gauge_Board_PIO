@@ -106,12 +106,80 @@ static void hook_3e4_trimpot(const twai_message_t* m) {
   }
 }
 
+// ---------------- non-Haltech CAN sniffer (debug) ----------------
+#ifdef EVO_SNIFFER
+#define SNIFF_SLOTS 48    // a whole car bus has many more distinct IDs than GlowCraft
+#else
+#define SNIFF_SLOTS 16
+#endif
+static CanSniffSlot s_sniff[SNIFF_SLOTS];
+
+// Starter labels for the Evo-X discovery build. Mitsubishi Evo X (CZ4A) OEM
+// bus @500 kbit; IDs below are community reverse-engineered (ECUMaster ADU app
+// note, EvolutionM / AutosportLabs captures, EvoScan) and are UNVERIFIED on this
+// specific car — the trailing '?' is a reminder to confirm by watching the byte
+// move on the sniffer. NOTE: SST clutch/trans temps are NOT here because they are
+// request/response PIDs (EvoScan CAN28/CAN33), not broadcast — they won't appear
+// in the sniffer at all without an active poller (that's the real finding to prove).
+#ifdef EVO_SNIFFER
+struct EvoLabel { uint16_t id; const char* name; };
+static const EvoLabel EVO_LABELS[] = {
+  { 0x308, "RPM?" },
+  { 0x210, "Throttle/TPS?" },
+  { 0x212, "Idle RPM target?" },
+  { 0x380, "Brake/Clutch sw?" },
+  { 0x415, "A/C switch?" },
+  { 0x608, "Coolant/ECT?" },
+  // Semantics known but carrying-ID not yet confirmed (find by watching sniffer):
+  //   gear: 0=Park 8=Reverse 16=Neutral 32=Drive
+  //   gearbox mode: 1=S-Sport 2=Sport 3=Normal ; diff mode: 1=Tarmac 2=Gravel 3=Snow
+};
+const char* can_label(uint16_t id) {
+  for (auto& l : EVO_LABELS) if (l.id == id) return l.name;
+  return nullptr;
+}
+#else
+const char* can_label(uint16_t) { return nullptr; }
+#endif
+
+// Record a frame that the Haltech registry didn't claim. One slot per distinct
+// ID; when full, the least-recently-seen slot is recycled.
+static void sniff_capture(const twai_message_t* m) {
+  uint16_t id = (uint16_t)m->identifier;
+  int slot = -1, oldest = 0;
+  uint32_t oldest_ms = UINT32_MAX;
+  for (int i = 0; i < SNIFF_SLOTS; i++) {
+    if (s_sniff[i].count && s_sniff[i].id == id) { slot = i; break; }  // existing
+    if (s_sniff[i].count == 0 && slot < 0) slot = i;                   // first free
+    if (s_sniff[i].last_ms < oldest_ms) { oldest_ms = s_sniff[i].last_ms; oldest = i; }
+  }
+  if (slot < 0) slot = oldest;                 // table full -> recycle oldest
+  CanSniffSlot* s = &s_sniff[slot];
+  if (s->id != id) { s->id = id; s->count = 0; }
+  s->dlc = m->data_length_code;
+  s->ext = m->extd;
+  for (int i = 0; i < 8; i++) s->data[i] = (i < m->data_length_code) ? m->data[i] : 0;
+  s->last_ms = millis();
+  s->count++;
+}
+
+const CanSniffSlot* cansniff_table(int* count) {
+  if (count) *count = SNIFF_SLOTS;
+  return s_sniff;
+}
+
 // ---------------- decode task ----------------
 void process_can_queue_task(void *arg) {
   build_index();
   twai_message_t message;
   while (1) {
     if (xQueueReceive(canMsgQueue, &message, pdMS_TO_TICKS(1)) == pdPASS) {
+#ifdef EVO_SNIFFER
+      // Foreign bus (Evo X @500k): the Haltech registry is meaningless here and
+      // would mis-claim any overlapping ID (e.g. 0x380), hiding it. Capture every
+      // frame raw so nothing is lost during discovery.
+      sniff_capture(&message);
+#else
       const IdIndex* idx = find_id((uint16_t)message.identifier);
       if (idx) {
         uint32_t now = millis();
@@ -123,7 +191,10 @@ void process_can_queue_task(void *arg) {
       } else {
         // GlowCraft strip-status frames (0x500+) — decoded in their own module.
         glowcraft_decode(&message);
+        // Also latch every non-Haltech frame for the debug sniffer view.
+        sniff_capture(&message);
       }
+#endif // EVO_SNIFFER
     }
     vTaskDelay(pdMS_TO_TICKS(1));
   }

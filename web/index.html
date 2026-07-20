@@ -66,11 +66,24 @@
 
 <div class="card">
   <h3>Global Controls</h3>
-  <div class="crow"><label>Brightness</label><span id="brval">--</span></div>
+  <div class="crow"><label>Brightness (undimmed)</label><span id="brval">--</span></div>
   <input type="range" id="bright" min="10" max="100" value="40"
     oninput="document.getElementById('brval').textContent=this.value"
     onchange="act('bright','?v='+this.value)">
-  <div class="row">
+  <div class="crow"><label>Dimmed brightness</label><span id="dimval">--</span></div>
+  <input type="range" id="dimbright" min="10" max="100" value="20"
+    oninput="document.getElementById('dimval').textContent=this.value"
+    onchange="act('dimbright','?v='+this.value)">
+  <button id="dimen" onclick="act('dimen')" style="margin-top:9px;width:100%">Dim on Park Light: --</button>
+  <div class="crow" style="margin-top:9px"><label>Park signal source</label>
+    <select id="dimsrc" onchange="act('dimsrc','?v='+this.value)">
+      <option value="0">Haltech</option>
+      <option value="1">GlowCraft</option>
+      <option value="2">Either</option>
+    </select>
+  </div>
+  <small>Dims the screen while the Park Light is on (e.g. lights on at night). Source can be the Haltech bus, the GlowCraft signals frame (0x520), or either. Reverts to undimmed if that source goes quiet.</small>
+  <div class="row" style="margin-top:9px">
     <button id="test" onclick="tglBtn('test')">Test: --</button>
     <button id="stats" onclick="tglBtn('stats')">Stats: --</button>
     <button id="dbg" onclick="tglBtn('dbg')">Debug: --</button>
@@ -131,6 +144,13 @@
   <button id="livebtn" onclick="toggleLive()">Show live channel data</button>
   <div id="livechans" class="hidden" style="margin-top:9px;font-family:monospace;font-size:12px"></div>
   <small>Every Haltech V2 broadcast channel this gauge is receiving right now — use to verify decodes against NSP.</small>
+</div>
+
+<div class="card">
+  <h3>CAN Sniffer (non-Haltech)</h3>
+  <button id="sniffbtn" onclick="toggleSniff()">Show non-Haltech CAN frames</button>
+  <div id="sniffchans" class="hidden" style="margin-top:9px;font-family:monospace;font-size:12px"></div>
+  <small>Every CAN ID <em>not</em> in the Haltech registry — GlowCraft strips (0x500+), the 0x510 signals frame, and anything else on the bus. Raw bytes update live; toggle a signal (e.g. the park light) and watch which ID and byte/bit changes.</small>
 </div>
 
 <div class="card" id="fleetcard">

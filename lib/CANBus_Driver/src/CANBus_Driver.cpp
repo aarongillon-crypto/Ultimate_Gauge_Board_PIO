@@ -15,7 +15,13 @@ static bool canbus_try_install(void) {
     // Bursts overflowed it and silently dropped frames, including low-rate ones
     // like Rotary Trim 3 (0x3E4, 5 Hz) that drive theme-sync. Deepen the queue.
     g_config.rx_queue_len = 32;
+#ifdef EVO_SNIFFER
+    // Mitsubishi Evo X (CZ4A) OEM powertrain bus is fixed at 500 kbit, not the
+    // 1 Mbit Haltech bus. See [env:evo-sniffer] in platformio.ini.
+    twai_timing_config_t t_config = TWAI_TIMING_CONFIG_500KBITS();
+#else
     twai_timing_config_t t_config = TWAI_TIMING_CONFIG_1MBITS();
+#endif
     twai_filter_config_t f_config = TWAI_FILTER_CONFIG_ACCEPT_ALL();  // Accept all IDs
 
     if (twai_driver_install(&g_config, &t_config, &f_config) != ESP_OK) return false;
@@ -33,6 +39,16 @@ void canbus_init(void) {
     } else {
         Serial.println("TWAI init FAILED — CAN disabled; display/web/OTA stay up, will retry.");
     }
+}
+
+bool canbus_send(uint32_t id, const uint8_t* data, uint8_t len, bool extended) {
+    if (!canbus_ok) return false;
+    twai_message_t m = {};
+    m.identifier = id;
+    m.extd = extended ? 1 : 0;
+    m.data_length_code = len > 8 ? 8 : len;
+    for (int i = 0; i < m.data_length_code; i++) m.data[i] = data[i];
+    return twai_transmit(&m, pdMS_TO_TICKS(5)) == ESP_OK;
 }
 
 void canbus_recover(void) {

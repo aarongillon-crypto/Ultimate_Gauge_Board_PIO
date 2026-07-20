@@ -51,6 +51,10 @@ extern const int HALTECH_CHANNEL_COUNT;
 // Registry lookup.
 int chan_index_from_key(uint16_t key);            // -1 if unknown
 uint16_t chan_key(int index);                     // 0 if out of range
+// Registry index of a bit-addressed channel by (can_id, byte offset, MSB bit
+// number). Bit channels have no chan_key, so this is how firmware features
+// (e.g. Park-Light CAN dimming) reach a specific bit. -1 if not present.
+int chan_index_by_idbit(uint16_t can_id, uint8_t offset, uint8_t bit_start);
 
 // Display-unit preferences (persisted; applied by chan_display/chan_unit_str).
 extern bool units_press_psi;   // pressures: true=psi, false=kPa (default psi)

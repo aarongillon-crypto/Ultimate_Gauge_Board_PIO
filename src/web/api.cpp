@@ -32,6 +32,9 @@ static void apiState() {
   doc["modeLabel"] = behavior.mode[current_mode].label;
   doc["page"] = (int)current_page;
   doc["bright"] = current_brightness;
+  doc["dimBright"] = dim_brightness;
+  doc["dimEn"] = dim_can_enabled;
+  doc["dimSrc"] = dim_source;
   doc["font"] = current_font;
   doc["test"] = test_mode_enabled;
   doc["stats"] = show_perf_stats;
@@ -85,6 +88,68 @@ static void apiChannels() {
   }
   String out; serializeJson(doc, out);
   srv->send(200, "application/json", out);
+}
+
+// ---------- /api/live — compact live values for the Designer's Live poll ----------
+// Streamed with chunked transfer so it NEVER builds a big JsonDocument + String
+// on internal heap. /api/channels does that (metadata for all 212 channels) and
+// polling it at 1 Hz under live CAN fragmented internal heap until lwip refused
+// new connections. Live mode needs only values, so this emits a compact
+// [[key,val,age],...] for SEEN, bindable (key != 0) channels and flushes in ~1KB
+// chunks — peak heap is one small buffer regardless of how many channels are hot.
+static void apiLive() {
+  srv->setContentLength(CONTENT_LENGTH_UNKNOWN);   // -> chunked transfer encoding
+  srv->send(200, "application/json", "");
+  String buf; buf.reserve(1300);
+  buf = "{\"live\":[";
+  bool first = true;
+  char frag[64];   // roomy: "[key,val,age]" + separator, never truncates
+  for (int i = 0; i < HALTECH_CHANNEL_COUNT; i++) {
+    uint32_t age = haltech_age_ms(i);
+    if (age == UINT32_MAX) continue;         // never seen — skip (keeps payload small)
+    uint16_t key = chan_key(i);
+    if (key == 0) continue;                  // bit channels aren't bindable/renderable
+    float val = chan_display(i, haltech_value(i));
+    snprintf(frag, sizeof(frag), "%s[%u,%.2f,%u]", first ? "" : ",", key, val, (unsigned)age);
+    buf += frag;
+    first = false;
+    if (buf.length() >= 1024) { srv->sendContent(buf); buf = ""; }
+  }
+  buf += "]}";
+  srv->sendContent(buf);
+  srv->sendContent("");                      // empty chunk terminates the stream
+}
+
+// Debug: dump the most recent frame for every non-Haltech CAN ID as raw hex.
+// Use to reverse-engineer third-party frames (e.g. which GlowCraft byte/bit is
+// the park signal). Streamed like /api/live to keep the internal heap calm.
+static void apiCanSniff() {
+  srv->setContentLength(CONTENT_LENGTH_UNKNOWN);
+  srv->send(200, "application/json", "");
+  int n = 0;
+  const CanSniffSlot* t = cansniff_table(&n);
+  uint32_t now = millis();
+  String buf; buf.reserve(1300);
+  buf = "{\"sniff\":[";
+  bool first = true;
+  char frag[144];
+  for (int i = 0; i < n; i++) {
+    if (t[i].count == 0) continue;                 // unused slot
+    char hex[17]; int p = 0;                        // up to 8 bytes -> 16 hex chars
+    for (int b = 0; b < t[i].dlc && b < 8; b++) p += snprintf(hex + p, sizeof(hex) - p, "%02X", t[i].data[b]);
+    hex[p] = 0;
+    char lblfrag[40] = "";                           // known-ID label (Evo build), else empty
+    const char* lbl = can_label(t[i].id);
+    if (lbl) snprintf(lblfrag, sizeof(lblfrag), ",\"lbl\":\"%s\"", lbl);
+    snprintf(frag, sizeof(frag), "%s{\"id\":%u,\"ext\":%u,\"dlc\":%u,\"d\":\"%s\",\"age\":%u,\"n\":%u%s}",
+             first ? "" : ",", t[i].id, t[i].ext, t[i].dlc, hex, (unsigned)(now - t[i].last_ms), (unsigned)t[i].count, lblfrag);
+    buf += frag;
+    first = false;
+    if (buf.length() >= 1024) { srv->sendContent(buf); buf = ""; }
+  }
+  buf += "]}";
+  srv->sendContent(buf);
+  srv->sendContent("");
 }
 
 // ---------- themes ----------
@@ -410,10 +475,27 @@ static void apiAction() {
     srv->send(200, "text/plain", String(m));
   } else if (name == "bright") {
     int b = constrain(v.toInt(), 10, 100);
-    current_brightness = b; set_backlight(b);
+    current_brightness = b;
     cfg_put_int("bright", b);
+    flag_bright_update = true;   // loop applies effective (dimmed-aware) brightness
     EspNowPacket pkt = {}; pkt.type = 5; pkt.value = b; broadcast_packet(&pkt);
     srv->send(200, "text/plain", String(b));
+  } else if (name == "dimbright") {
+    int b = constrain(v.toInt(), 10, 100);
+    dim_brightness = b;
+    cfg_put_int("dimbr", b);
+    flag_bright_update = true;   // re-apply if we're currently dimmed
+    srv->send(200, "text/plain", String(b));
+  } else if (name == "dimen") {
+    dim_can_enabled = !dim_can_enabled;
+    cfg_put_bool("dimen", dim_can_enabled);
+    flag_bright_update = true;   // enabling/disabling may change the live level
+    srv->send(200, "text/plain", dim_can_enabled ? "1" : "0");
+  } else if (name == "dimsrc") {
+    dim_source = (uint8_t)constrain(v.toInt(), 0, 2);   // 0 Haltech, 1 GlowCraft, 2 Either
+    cfg_put_uchar("dimsrc", dim_source);
+    flag_bright_update = true;   // source change may change the live level
+    srv->send(200, "text/plain", String((int)dim_source));
   } else if (name == "test") {
     test_mode_enabled = !test_mode_enabled;
     EspNowPacket pkt = {}; pkt.type = 4; pkt.value = test_mode_enabled?1:0; broadcast_packet(&pkt);
@@ -490,6 +572,8 @@ void api_register(WebServer& server) {
   server.on("/api/layout", HTTP_DELETE, apiLayoutDelete);
   server.on("/api/layout/page", HTTP_POST, apiLayoutPage);
   server.on("/api/channels", HTTP_GET, apiChannels);
+  server.on("/api/live", HTTP_GET, apiLive);
+  server.on("/api/cansniff", HTTP_GET, apiCanSniff);
   server.on("/api/config", HTTP_GET, apiConfigGet);
   server.on("/api/config", HTTP_POST, apiConfigSet);
   server.on("/api/fleet", HTTP_GET, apiFleet);

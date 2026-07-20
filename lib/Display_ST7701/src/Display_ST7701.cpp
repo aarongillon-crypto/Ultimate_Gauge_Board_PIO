@@ -412,6 +412,10 @@ esp_err_t lcd_resync() {
   return esp_lcd_rgb_panel_restart(panel_handle);
 }
 
+void lcd_set_pclk(uint32_t hz) {
+  if (panel_handle != NULL) esp_lcd_rgb_panel_set_pclk(panel_handle, hz);
+}
+
 void backlight_init() {
   ledcAttach(LCD_BACKLIGHT_PIN, frequency, resolution);
 }

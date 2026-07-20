@@ -1,0 +1,14 @@
+{
+  "schema": "ugb-layout", "v": 1,
+  "meta": { "name": "led" },
+  "canvas": { "w": 480, "h": 480, "round": true },
+  "start_page": 0,
+  "pages": [{ "id": 0, "elements": [
+    { "type": "text", "x": 240, "y": 170, "str": "LED INDICATORS", "font": "montserrat_20",
+      "color": "#888888", "align": "center" },
+    { "type": "led", "cx": 120, "cy": 250, "r": 20, "color": "#00ff00", "chan": 13824, "on_above": 4000 },
+    { "type": "led", "cx": 200, "cy": 250, "r": 20, "color": "#ffaa00", "chan": 13826, "on_above": 5 },
+    { "type": "led", "cx": 280, "cy": 250, "r": 20, "color": "#ff0000", "chan": 13824, "on_above": 6500 },
+    { "type": "led", "cx": 360, "cy": 250, "r": 20, "color": "#3060ff" }
+  ]}]
+}

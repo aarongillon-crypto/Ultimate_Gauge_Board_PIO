@@ -1,0 +1,178 @@
+#!/usr/bin/env python3
+# Generates src/ui/icons_gen.c + icons_gen.h: a small automotive telltale icon
+# set as LVGL A8 (alpha-only) images. A8 means each byte is coverage/alpha, so
+# the image is tinted at runtime via style image-recolor -one asset, any colour
+# (theme token or hex). Dependency-free: a tiny supersampled rasterizer draws
+# each icon from geometric primitives (no Pillow/SVG toolchain needed), so the
+# set is reproducible and easy to extend. Run:  python tools/gen_icons.py
+#
+# Icons are 32x32. Shapes are predicate functions in 32-px space; each final
+# pixel samples SxS subpixels for anti-aliasing.
+import os
+
+SIZE = 32
+SS = 4  # subpixel samples per axis
+
+
+# ---- shape predicates (x,y in 32-px space, return True if inside) ----
+def disc(cx, cy, r):
+    return lambda x, y: (x - cx) ** 2 + (y - cy) ** 2 <= r * r
+
+
+def ring(cx, cy, r, t):
+    return lambda x, y: (r - t) ** 2 <= (x - cx) ** 2 + (y - cy) ** 2 <= r * r
+
+
+def rectf(x0, y0, x1, y1):
+    return lambda x, y: x0 <= x <= x1 and y0 <= y <= y1
+
+
+def frame(x0, y0, x1, y1, t):
+    inner = rectf(x0 + t, y0 + t, x1 - t, y1 - t)
+    outer = rectf(x0, y0, x1, y1)
+    return lambda x, y: outer(x, y) and not inner(x, y)
+
+
+def seg(x0, y0, x1, y1, t):
+    dx, dy = x1 - x0, y1 - y0
+    L2 = dx * dx + dy * dy or 1.0
+    hw = t / 2.0
+
+    def f(x, y):
+        u = ((x - x0) * dx + (y - y0) * dy) / L2
+        u = 0.0 if u < 0 else 1.0 if u > 1 else u
+        px, py = x0 + u * dx, y0 + u * dy
+        return (x - px) ** 2 + (y - py) ** 2 <= hw * hw
+    return f
+
+
+def tri(ax, ay, bx, by, cx, cy):
+    def sign(x1, y1, x2, y2, x3, y3):
+        return (x1 - x3) * (y2 - y3) - (x2 - x3) * (y1 - y3)
+
+    def f(x, y):
+        d1 = sign(x, y, ax, ay, bx, by)
+        d2 = sign(x, y, bx, by, cx, cy)
+        d3 = sign(x, y, cx, cy, ax, ay)
+        neg = (d1 < 0) or (d2 < 0) or (d3 < 0)
+        pos = (d1 > 0) or (d2 > 0) or (d3 > 0)
+        return not (neg and pos)
+    return f
+
+
+# ---- icon compositions (union of shapes) ----
+ICONS = {
+    # Oil-drop: teardrop = disc body + triangular apex.
+    "oil": [
+        disc(16, 21, 7),
+        tri(16, 6, 10, 20, 22, 20),
+    ],
+    # Coolant/temperature: thermometer (bulb + stem) over a wavy water line.
+    "coolant": [
+        disc(16, 24, 5),
+        rectf(14, 6, 18, 23),
+        disc(16, 6, 2),
+        seg(4, 29, 10, 29, 2), seg(10, 29, 16, 29, 2),
+        seg(16, 29, 22, 29, 2), seg(22, 29, 28, 29, 2),
+    ],
+    # Battery: frame + two terminals + '+' and '-' marks.
+    "battery": [
+        frame(4, 10, 28, 27, 3),
+        rectf(8, 7, 12, 10), rectf(20, 7, 24, 10),
+        rectf(8, 17, 14, 19), rectf(10, 15, 12, 21),   # '+'
+        rectf(19, 17, 25, 19),                          # '-'
+    ],
+    # Check-engine: blocky engine silhouette.
+    "engine": [
+        rectf(6, 14, 24, 24),
+        rectf(9, 9, 16, 14),          # cam cover
+        rectf(24, 16, 28, 21),        # right nub
+        rectf(3, 17, 6, 20),          # left port
+        rectf(9, 24, 12, 27), rectf(19, 24, 22, 27),   # feet
+        rectf(17, 11, 22, 14),        # intake block
+    ],
+    # Fuel pump: body frame + display slot + nozzle/hose.
+    "fuel": [
+        frame(6, 6, 19, 27, 2),
+        rectf(9, 9, 16, 13),          # display
+        seg(19, 12, 24, 12, 2),       # hose to nozzle
+        rectf(23, 9, 25, 20),         # nozzle body
+        seg(25, 18, 27, 16, 2),
+    ],
+}
+
+
+# A rotatable needle sprite (non-square): tapered pointer, tip up, hub at base.
+# Pivot for rotation is the hub centre (NW=w/2, NH-8) -- kept in sync in the C.
+NW, NH = 16, 180
+SPRITES = {
+    "needle": (NW, NH, [
+        tri(NW / 2, 3, 3, NH - 14, NW - 3, NH - 14),
+        disc(NW / 2, NH - 8, 6),
+    ]),
+}
+
+
+def rasterize(w, h, shapes):
+    data = bytearray(w * h)
+    for py in range(h):
+        for px in range(w):
+            hits = 0
+            for sy in range(SS):
+                for sx in range(SS):
+                    x = px + (sx + 0.5) / SS
+                    y = py + (sy + 0.5) / SS
+                    if any(s(x, y) for s in shapes):
+                        hits += 1
+            data[py * w + px] = (hits * 255) // (SS * SS)
+    return data
+
+
+def emit_array(name, w, h, data):
+    lines = ["static const uint8_t %s_map[] = {" % name]
+    for i in range(0, len(data), 16):
+        lines.append("  " + ",".join("0x%02X" % b for b in data[i:i + 16]) + ",")
+    lines.append("};")
+    dsc = (
+        "const lv_image_dsc_t %s = {\n"
+        "  .header = { .magic = LV_IMAGE_HEADER_MAGIC, .cf = LV_COLOR_FORMAT_A8,\n"
+        "              .flags = 0, .w = %d, .h = %d, .stride = %d, .reserved_2 = 0 },\n"
+        "  .data_size = %d, .data = %s_map, .reserved = NULL, .reserved_2 = NULL,\n"
+        "};\n" % (name, w, h, w, w * h, name)
+    )
+    return "\n".join(lines) + "\n" + dsc
+
+
+def main():
+    here = os.path.dirname(os.path.abspath(__file__))
+    ui = os.path.join(here, "..", "src", "ui")
+    names = sorted(ICONS.keys())
+
+    c = ['// AUTO-GENERATED by tools/gen_icons.py -do not edit by hand.',
+         '// Automotive telltale icons (32x32) + needle sprite, A8 (recoloured at',
+         '// runtime via style).', '#include <lvgl.h>', '']
+    for n in names:
+        c.append(emit_array("icon_" + n, SIZE, SIZE, rasterize(SIZE, SIZE, ICONS[n])))
+    for n in sorted(SPRITES.keys()):
+        w, ht, shapes = SPRITES[n]
+        c.append(emit_array("icon_" + n, w, ht, rasterize(w, ht, shapes)))
+    with open(os.path.join(ui, "icons_gen.c"), "w", newline="\n") as f:
+        f.write("\n".join(c))
+
+    h = ['// AUTO-GENERATED by tools/gen_icons.py -do not edit by hand.',
+         '#pragma once', '#include <lvgl.h>', '']
+    for n in names + sorted(SPRITES.keys()):
+        h.append("LV_IMAGE_DECLARE(icon_%s);" % n)
+    h += ['', '// X-macro: X(json-name, symbol) -expand to build a name->dsc table.',
+          '#define ICON_TABLE_ENTRIES \\']
+    xlines = ["  X(\"%s\", icon_%s)" % (n, n) for n in names]
+    h.append(" \\\n".join(xlines))   # no trailing backslash on the last entry
+    h.append("")
+    with open(os.path.join(ui, "icons_gen.h"), "w", newline="\n") as f:
+        f.write("\n".join(h))
+
+    print("gen_icons: wrote %d icons -> src/ui/icons_gen.{c,h}" % len(names))
+
+
+if __name__ == "__main__":
+    main()

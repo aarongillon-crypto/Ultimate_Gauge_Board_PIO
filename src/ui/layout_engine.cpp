@@ -4,9 +4,19 @@
 #include "../haltech_channels.h"
 #include "../haltech_decode.h"
 #include "../themes.h"
+#include "icons_gen.h"
+#include "Display_ST7701.h"   // lcd_set_pclk / LCD_PCLK_* (reload-burst clock drop)
 #include <ArduinoJson.h>
 #include <lvgl.h>
 #include <math.h>
+
+// Telltale icon lookup (table generated in icons_gen.h via X-macro).
+static const lv_image_dsc_t* icon_by_name(const char* n) {
+  #define X(s, sym) if (strcmp(n, s) == 0) return &sym;
+  ICON_TABLE_ENTRIES
+  #undef X
+  return nullptr;
+}
 
 // ---------------- fonts (spec §5: fixed v1 set, referenced by name) ----------------
 LV_FONT_DECLARE(dseg14_96);
@@ -34,7 +44,8 @@ static const lv_font_t* font_by_name(const char* n) {
 #define LE_MAX_ELEMENTS 64
 #define LE_STR_MAX 32
 
-enum LeType : uint8_t { LE_TEXT, LE_NUMERIC, LE_NEEDLE, LE_RING, LE_BAR, LE_SHAPE, LE_WARNING };
+enum LeType : uint8_t { LE_TEXT, LE_NUMERIC, LE_NEEDLE, LE_RING, LE_BAR, LE_SHAPE, LE_WARNING, LE_SHIFT,
+                        LE_SCALE, LE_LED, LE_IMAGE, LE_ALERT };
 enum LeShape : uint8_t { LE_RECT, LE_CIRCLE, LE_LINE };
 
 // Colour: hex value, or a theme-token role re-resolved on theme change.
@@ -62,6 +73,30 @@ struct LeElement {
   uint16_t stale_ms;          // hide when bound channel older than this (0 = off)
   uint8_t  n_pts;             // shape:"line" — point count (0 = rect/circle)
   int8_t   prev_shown;        // gate cache: -1 unknown, 0 hidden, 1 shown
+  // extensions (Phase 1): shiftlights / bar origin / peak needle / pulse
+  uint8_t  segs;              // shiftlights: segment count (0 = n/a)
+  int16_t  gap;               // shiftlights: inter-segment gap px
+  bool     flash_max;         // shiftlights: blink all at/above max
+  bool     has_origin;        // bar: grow fill from origin instead of min
+  float    origin;            // bar: origin value
+  bool     peak_src;          // needle: park at session max instead of live
+  float    peak;              // needle: peak accumulator
+  bool     pulse;             // any: opacity blink via lv_anim
+  // Phase 2 widgets: scale / led / image
+  uint8_t  sc_major, sc_minor;// scale: major-tick count, minor ticks per major
+  int16_t  sc_maj_len, sc_min_len;
+  bool     sc_labels;         // scale: draw numeric labels on major ticks
+  float    sc_from, sc_to;    // scale: section (redline) value range (to<=from = none)
+  float    led_on;            // led: on threshold (display units)
+  const void* icon;           // image: lv_image_dsc_t*
+  // Phase 3 (tier-3, measure-and-cull)
+  bool     alert_full;        // alert: fullscreen overlay vs edge ring
+  uint8_t  alert_opa;         // alert: fullscreen overlay opacity
+  bool     img_needle;        // needle: rotated bitmap sprite instead of a line
+  bool     has_shadow;        // any: blur shadow (heavy — measured)
+  int16_t  shadow_w, shadow_spread, shadow_ox, shadow_oy;
+  uint8_t  shadow_opa;
+  LeColor  shadow_col;
   // LVGL handles + dirty caches
   lv_obj_t* obj;
   lv_obj_t* obj2;
@@ -86,6 +121,10 @@ static lv_grad_dsc_t s_bg_grad;        // style keeps a pointer — must persist
 #define LE_MAX_LINE_PTS 8
 static int16_t s_pts[LE_MAX_ELEMENTS][LE_MAX_LINE_PTS][2];
 static lv_point_precise_t s_line_lv[LE_MAX_ELEMENTS][LE_MAX_LINE_PTS];
+// Per-scale section style (LVGL keeps the pointer, so it must persist). One slot
+// per element index; reset before reuse so a page reload doesn't leak props.
+static lv_style_t s_sec_style[LE_MAX_ELEMENTS];
+static bool s_sec_used[LE_MAX_ELEMENTS];
 
 // ---------------- colour helpers ----------------
 static const char* TOKEN_ROLES[] = { "text", "low", "mid", "high", "bg",
@@ -119,6 +158,24 @@ static bool parse_color(JsonVariantConst v, LeColor* out) {
   return false;
 }
 static uint32_t col_val(const LeColor& c) { return c.role >= 0 ? role_color(c.role) : c.hex; }
+
+// Forward decl: zone_col is defined in the per-frame section but used by
+// build_element (shiftlights colours its segments by threshold at build time).
+static uint32_t zone_col(const LeElement& el, float v);
+
+// pulse: infinite opacity blink via LVGL's core animation engine (no per-frame
+// work in our update path; a hidden object's anim just sets style, no redraw).
+static void anim_opa_cb(void* obj, int32_t v) { lv_obj_set_style_opa((lv_obj_t*)obj, (lv_opa_t)v, 0); }
+static void start_pulse(lv_obj_t* o) {
+  lv_anim_t a; lv_anim_init(&a);
+  lv_anim_set_var(&a, o);
+  lv_anim_set_values(&a, LV_OPA_COVER, 40);
+  lv_anim_set_duration(&a, 450);
+  lv_anim_set_playback_duration(&a, 450);
+  lv_anim_set_repeat_count(&a, LV_ANIM_REPEAT_INFINITE);
+  lv_anim_set_exec_cb(&a, anim_opa_cb);
+  lv_anim_start(&a);
+}
 
 // ---------------- parse + validate (spec §9) ----------------
 static bool coord_ok(long v) { return v >= -512 && v <= 1023; }
@@ -175,6 +232,18 @@ static bool parse_page_elements(JsonObjectConst page, const char* meta_name, boo
       el.vis_value = vi["value"] | 0.0f;
     }
     el.stale_ms = (uint16_t)constrain((long)(e["stale_ms"] | 0L), 0L, 60000L);
+    el.pulse = e["pulse"] | false;   // any element: opacity blink
+    JsonObjectConst shd = e["shadow"];   // any element: blur shadow (heavy)
+    el.has_shadow = !shd.isNull();
+    if (el.has_shadow) {
+      el.shadow_w = (int16_t)constrain((long)(shd["w"] | 8L), 0L, 100L);
+      el.shadow_spread = (int16_t)constrain((long)(shd["spread"] | 0L), -30L, 30L);
+      el.shadow_ox = (int16_t)constrain((long)(shd["x"] | 0L), -60L, 60L);
+      el.shadow_oy = (int16_t)constrain((long)(shd["y"] | 0L), -60L, 60L);
+      el.shadow_opa = (uint8_t)constrain((long)(shd["opa"] | 180L), 0L, 255L);
+      el.shadow_col.role = -1; el.shadow_col.hex = 0x000000;
+      if (!shd["color"].isNull()) parse_color(shd["color"], &el.shadow_col);
+    }
 
     // shared helpers
     auto getChan = [&](bool required) -> bool {
@@ -231,6 +300,9 @@ static bool parse_page_elements(JsonObjectConst page, const char* meta_name, boo
       el.start_deg = (int16_t)(e["start_deg"] | 135L);
       el.sweep_deg = (int16_t)(e["sweep_deg"] | 270L);
       el.width = (uint8_t)constrain((int)(e["width"] | 8), 1, 40);
+      el.peak_src = strcmp(e["source"] | "live", "peak") == 0;  // park at session max
+      el.peak = -1e9f;
+      el.img_needle = strcmp(e["style"] | "line", "image") == 0;  // rotated sprite (heavy)
     } else if (strcmp(type, "ring") == 0) {
       el.type = LE_RING;
       if (!getChan(true) || !getRange()) return false;
@@ -247,6 +319,18 @@ static bool parse_page_elements(JsonObjectConst page, const char* meta_name, boo
       if (el.w <= 0 || el.h <= 0) { err = "bar w/h must be > 0"; return false; }
       el.horiz = strcmp(e["dir"] | "h", "v") != 0;
       el.radius = (uint8_t)constrain((int)(e["radius"] | 0), 0, 60);
+      el.has_origin = !e["origin"].isNull();   // center-origin fill (boost/vacuum, ±)
+      el.origin = e["origin"] | 0.0f;
+    } else if (strcmp(type, "shiftlights") == 0) {
+      el.type = LE_SHIFT;
+      if (!getChan(true) || !getRange() || !getXY()) return false;
+      if (!getCol("low", &el.low, true) || !getCol("mid", &el.mid, true) || !getCol("high", &el.high, true)) return false;
+      el.segs = (uint8_t)constrain((int)(e["segs"] | 8), 1, 20);
+      el.w = (int16_t)constrain((long)(e["seg_w"] | 20L), 1L, 200L);
+      el.h = (int16_t)constrain((long)(e["seg_h"] | 40L), 1L, 200L);
+      el.gap = (int16_t)constrain((long)(e["gap"] | 6L), 0L, 60L);
+      el.radius = (uint8_t)constrain((int)(e["radius"] | 3), 0, 60);
+      el.flash_max = e["flash_max"] | false;
     } else if (strcmp(type, "shape") == 0) {
       el.type = LE_SHAPE;
       const char* sh = e["shape"] | "rect";
@@ -287,6 +371,44 @@ static bool parse_page_elements(JsonObjectConst page, const char* meta_name, boo
       getAlign();
       strlcpy(el.str, e["on_str"] | "!", sizeof(el.str));
       el.off_hidden = e["off_hidden"] | true;
+    } else if (strcmp(type, "scale") == 0) {
+      el.type = LE_SCALE;   // static dial: ticks + labels + optional redline section
+      if (!getRange() || !getCol("color", &el.col, true)) return false;
+      el.cx = (int16_t)(e["cx"] | 240L); el.cy = (int16_t)(e["cy"] | 240L);
+      el.r = (int16_t)(e["r"] | 220L);
+      if (el.r <= 0) { err = "scale r must be > 0"; return false; }
+      el.start_deg = (int16_t)(e["start_deg"] | 135L);
+      el.sweep_deg = (int16_t)(e["sweep_deg"] | 270L);
+      el.sc_major = (uint8_t)constrain((int)(e["major"] | 6), 2, 30);
+      el.sc_minor = (uint8_t)constrain((int)(e["minor"] | 4), 0, 10);
+      el.sc_maj_len = (int16_t)constrain((long)(e["maj_len"] | 14L), 1L, 60L);
+      el.sc_min_len = (int16_t)constrain((long)(e["min_len"] | 7L), 1L, 60L);
+      el.width = (uint8_t)constrain((int)(e["tick_w"] | 3), 1, 20);
+      el.sc_labels = e["labels"] | false;
+      if (el.sc_labels && !getFont()) return false;
+      el.sc_from = e["sec_from"] | 1.0f; el.sc_to = e["sec_to"] | 0.0f;   // to<=from => no section
+      if (el.sc_to > el.sc_from && !getCol("sec_color", &el.high, true)) return false;
+    } else if (strcmp(type, "led") == 0) {
+      el.type = LE_LED;
+      if (!getCol("color", &el.col, true)) return false;
+      el.cx = (int16_t)(e["cx"] | 240L); el.cy = (int16_t)(e["cy"] | 240L);
+      el.r = (int16_t)constrain((long)(e["r"] | 12L), 2L, 120L);
+      if (!getChan(false)) return false;                 // optional bind (unbound = always on)
+      el.led_on = e["on_above"] | 0.5f;                  // on when display >= threshold
+    } else if (strcmp(type, "image") == 0) {
+      el.type = LE_IMAGE;
+      if (!getXY()) return false;
+      const char* icn = e["icon"] | "";
+      el.icon = icon_by_name(icn);
+      if (!el.icon) { err = String("unknown icon ") + icn; return false; }
+      el.has_fill = !e["recolor"].isNull();              // reuse has_fill => recolour present
+      if (el.has_fill && !getCol("recolor", &el.col, true)) return false;
+    } else if (strcmp(type, "alert") == 0) {
+      el.type = LE_ALERT;   // danger overlay; gate with visible_if, blink with pulse
+      if (!getCol("color", &el.col, true)) return false;
+      el.alert_full = strcmp(e["mode"] | "ring", "fullscreen") == 0;
+      el.width = (uint8_t)constrain((int)(e["width"] | 20), 2, 120);   // ring thickness
+      el.alert_opa = (uint8_t)constrain((int)(e["opa"] | 128), 0, 255); // fullscreen opacity
     } else {
       err = String("unknown element type ") + type;
       return false;
@@ -373,6 +495,27 @@ static void place_label(LeElement& el, const char* text) {
   int32_t x = el.align == 0 ? el.x : el.align == 2 ? el.x - sz.x : el.x - sz.x / 2;
   lv_obj_set_pos(el.obj, x, el.y - sz.y / 2);
 }
+// Numeric-with-unit: the value uses the element font (often a digit-only subset
+// like DSEG/Fira Mono, so unit letters would tofu); the unit is a second label
+// (el.obj2) in a full-glyph font. Both are vertically centred on el.y and the
+// value+gap+unit group is anchored by el.align.
+static void place_numeric(LeElement& el, const char* valtext) {
+  lv_point_t vs;
+  lv_text_get_size(&vs, valtext, el.font, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+  if (!el.obj2) {                        // no unit — identical to place_label
+    int32_t x = el.align == 0 ? el.x : el.align == 2 ? el.x - vs.x : el.x - vs.x / 2;
+    lv_obj_set_pos(el.obj, x, el.y - vs.y / 2);
+    return;
+  }
+  const lv_font_t* uf = &lv_font_montserrat_20;
+  lv_point_t us;
+  lv_text_get_size(&us, lv_label_get_text(el.obj2), uf, 0, 0, LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+  const int gap = 6;
+  int32_t total = vs.x + gap + us.x;
+  int32_t startx = el.align == 0 ? el.x : el.align == 2 ? el.x - total : el.x - total / 2;
+  lv_obj_set_pos(el.obj, startx, el.y - vs.y / 2);
+  lv_obj_set_pos(el.obj2, startx + vs.x + gap, el.y - us.y / 2);
+}
 
 static void build_element(LeElement& el, int idx) {
   switch (el.type) {
@@ -392,17 +535,35 @@ static void build_element(LeElement& el, int idx) {
       lv_obj_set_style_text_align(el.obj, lv_align_of(el.align), 0);
       const char* initial = el.type == LE_WARNING ? el.str : "--";
       lv_label_set_text(el.obj, initial);
-      place_label(el, initial);
+      if (el.type == LE_NUMERIC && el.unit) {   // separate full-glyph unit label
+        el.obj2 = lv_label_create(gauge_scr);
+        lv_obj_set_style_text_font(el.obj2, &lv_font_montserrat_20, 0);
+        lv_obj_set_style_text_color(el.obj2, lv_color_hex(col_val(el.col)), 0);
+        lv_label_set_text(el.obj2, chan_unit_str(el.chan_idx));
+        place_numeric(el, initial);
+      } else {
+        place_label(el, initial);
+      }
       if (el.type == LE_WARNING && el.off_hidden) lv_obj_add_flag(el.obj, LV_OBJ_FLAG_HIDDEN);
       el.prev_a = -1;   // warning: last on/off state
       break;
     }
     case LE_NEEDLE: {
-      el.obj = lv_line_create(gauge_scr);
-      lv_obj_set_style_line_width(el.obj, el.width, 0);
-      lv_obj_set_style_line_color(el.obj, lv_color_hex(col_val(el.col)), 0);
-      lv_obj_set_style_line_rounded(el.obj, 0, 0);
-      el.prev_a = el.prev_b = INT32_MIN;
+      if (el.img_needle) {   // rotated bitmap sprite (heavy — measured)
+        el.obj = lv_image_create(gauge_scr);
+        lv_image_set_src(el.obj, &icon_needle);
+        lv_obj_set_style_image_recolor(el.obj, lv_color_hex(col_val(el.col)), 0);
+        lv_obj_set_style_image_recolor_opa(el.obj, LV_OPA_COVER, 0);
+        lv_image_set_pivot(el.obj, 8, 172);          // hub centre (NW/2, NH-8)
+        lv_obj_set_pos(el.obj, el.cx - 8, el.cy - 172);
+        el.prev_a = INT32_MIN;
+      } else {
+        el.obj = lv_line_create(gauge_scr);
+        lv_obj_set_style_line_width(el.obj, el.width, 0);
+        lv_obj_set_style_line_color(el.obj, lv_color_hex(col_val(el.col)), 0);
+        lv_obj_set_style_line_rounded(el.obj, 0, 0);
+        el.prev_a = el.prev_b = INT32_MIN;
+      }
       break;
     }
     case LE_RING: {
@@ -470,12 +631,139 @@ static void build_element(LeElement& el, int idx) {
       lv_obj_clear_flag(el.obj, LV_OBJ_FLAG_SCROLLABLE);
       break;
     }
+    case LE_SHIFT: {
+      // Transparent container holding `segs` rects; each rect is pre-coloured by
+      // its threshold zone (green→amber→red by position) and starts off. Update
+      // only toggles bg_opa, so only the segments that changed invalidate.
+      el.obj = lv_obj_create(gauge_scr);
+      lv_obj_remove_style_all(el.obj);
+      lv_obj_set_pos(el.obj, el.x, el.y);
+      int totalw = el.segs * el.w + (el.segs - 1) * el.gap;
+      lv_obj_set_size(el.obj, totalw, el.h);
+      lv_obj_clear_flag(el.obj, LV_OBJ_FLAG_SCROLLABLE);
+      for (int s = 0; s < el.segs; s++) {
+        float thr = el.min + (s + 1) * (el.max - el.min) / el.segs;
+        lv_obj_t* seg = lv_obj_create(el.obj);
+        lv_obj_remove_style_all(seg);
+        lv_obj_set_pos(seg, s * (el.w + el.gap), 0);
+        lv_obj_set_size(seg, el.w, el.h);
+        lv_obj_set_style_radius(seg, el.radius, 0);
+        lv_obj_set_style_bg_color(seg, lv_color_hex(zone_col(el, thr)), 0);
+        lv_obj_set_style_bg_opa(seg, LV_OPA_TRANSP, 0);
+        lv_obj_clear_flag(seg, LV_OBJ_FLAG_SCROLLABLE);
+      }
+      el.prev_a = -1; el.prev_b = -1;
+      break;
+    }
+    case LE_SCALE: {
+      el.obj = lv_scale_create(gauge_scr);
+      lv_scale_set_mode(el.obj, LV_SCALE_MODE_ROUND_INNER);
+      int d = el.r * 2;
+      lv_obj_set_size(el.obj, d, d);
+      lv_obj_set_pos(el.obj, el.cx - el.r, el.cy - el.r);
+      lv_obj_set_style_bg_opa(el.obj, LV_OPA_TRANSP, 0);
+      lv_obj_set_style_border_width(el.obj, 0, 0);
+      lv_obj_clear_flag(el.obj, LV_OBJ_FLAG_SCROLLABLE);
+      lv_scale_set_rotation(el.obj, el.start_deg);
+      lv_scale_set_angle_range(el.obj, el.sweep_deg);
+      lv_scale_set_range(el.obj, (int32_t)el.min, (int32_t)el.max);
+      uint32_t total = (uint32_t)(el.sc_major - 1) * (el.sc_minor + 1) + 1;
+      lv_scale_set_total_tick_count(el.obj, total);
+      lv_scale_set_major_tick_every(el.obj, el.sc_minor + 1);
+      lv_scale_set_label_show(el.obj, el.sc_labels);
+      uint32_t tc = col_val(el.col);
+      lv_obj_set_style_line_color(el.obj, lv_color_hex(tc), LV_PART_ITEMS);       // minor ticks
+      lv_obj_set_style_length(el.obj, el.sc_min_len, LV_PART_ITEMS);
+      lv_obj_set_style_line_width(el.obj, el.width, LV_PART_ITEMS);
+      lv_obj_set_style_line_color(el.obj, lv_color_hex(tc), LV_PART_INDICATOR);   // major ticks + labels
+      lv_obj_set_style_length(el.obj, el.sc_maj_len, LV_PART_INDICATOR);
+      lv_obj_set_style_line_width(el.obj, el.width + 1, LV_PART_INDICATOR);
+      lv_obj_set_style_text_color(el.obj, lv_color_hex(tc), LV_PART_INDICATOR);
+      if (el.sc_labels) lv_obj_set_style_text_font(el.obj, el.font, LV_PART_INDICATOR);
+      if (el.sc_to > el.sc_from) {                 // redline section
+        lv_style_t* st = &s_sec_style[idx];
+        if (s_sec_used[idx]) lv_style_reset(st);
+        lv_style_init(st);
+        s_sec_used[idx] = true;
+        uint32_t sc = col_val(el.high);
+        lv_style_set_line_color(st, lv_color_hex(sc));
+        lv_style_set_line_width(st, el.width + 1);
+        lv_style_set_length(st, el.sc_maj_len);
+        lv_style_set_text_color(st, lv_color_hex(sc));
+        lv_scale_section_t* sec = lv_scale_add_section(el.obj);
+        lv_scale_set_section_range(el.obj, sec, (int32_t)el.sc_from, (int32_t)el.sc_to);
+        lv_scale_set_section_style_indicator(el.obj, sec, st);
+        lv_scale_set_section_style_items(el.obj, sec, st);
+      }
+      break;
+    }
+    case LE_LED: {
+      el.obj = lv_led_create(gauge_scr);
+      lv_obj_set_pos(el.obj, el.cx - el.r, el.cy - el.r);
+      lv_obj_set_size(el.obj, el.r * 2, el.r * 2);
+      lv_led_set_color(el.obj, lv_color_hex(col_val(el.col)));
+      if (el.chan_idx < 0) lv_led_on(el.obj);    // unbound = static indicator
+      else lv_led_off(el.obj);
+      el.prev_a = -1;
+      break;
+    }
+    case LE_IMAGE: {
+      el.obj = lv_image_create(gauge_scr);
+      lv_image_set_src(el.obj, (const lv_image_dsc_t*)el.icon);
+      // A8 icons carry only coverage; recolour supplies the pixel colour.
+      lv_obj_set_style_image_recolor(el.obj, lv_color_hex(el.has_fill ? col_val(el.col) : 0xFFFFFF), 0);
+      lv_obj_set_style_image_recolor_opa(el.obj, LV_OPA_COVER, 0);
+      lv_obj_set_pos(el.obj, el.x, el.y);
+      break;
+    }
+    case LE_ALERT: {
+      el.obj = lv_obj_create(gauge_scr);
+      lv_obj_remove_style_all(el.obj);
+      lv_obj_clear_flag(el.obj, LV_OBJ_FLAG_SCROLLABLE);
+      if (el.alert_full) {                 // whole-screen flash (heavy — measured)
+        lv_obj_set_pos(el.obj, 0, 0);
+        lv_obj_set_size(el.obj, 480, 480);
+        lv_obj_set_style_radius(el.obj, LV_RADIUS_CIRCLE, 0);
+        lv_obj_set_style_bg_color(el.obj, lv_color_hex(col_val(el.col)), 0);
+        lv_obj_set_style_bg_opa(el.obj, el.alert_opa, 0);
+      } else {                             // edge ring (small invalidated area)
+        int r = 238;
+        lv_obj_set_pos(el.obj, 240 - r, 240 - r);
+        lv_obj_set_size(el.obj, r * 2, r * 2);
+        lv_obj_set_style_radius(el.obj, r, 0);
+        lv_obj_set_style_bg_opa(el.obj, LV_OPA_TRANSP, 0);
+        lv_obj_set_style_border_width(el.obj, el.width, 0);
+        lv_obj_set_style_border_color(el.obj, lv_color_hex(col_val(el.col)), 0);
+      }
+      break;
+    }
+  }
+  // Any element can opt into a pulsing (blinking) opacity — EXCEPT alert: it is
+  // screen-sized, and LVGL invalidates by bounding box, so pulsing it repaints
+  // the whole screen every cycle (measured R90). A static alert that appears on
+  // its visible_if trigger costs one redraw per transition — cheap in both modes.
+  if (el.pulse && el.obj && el.type != LE_ALERT) start_pulse(el.obj);
+  // ...or a blur shadow (heavy — quantified in the tier-3 round).
+  if (el.has_shadow && el.obj) {
+    lv_obj_set_style_shadow_width(el.obj, el.shadow_w, 0);
+    lv_obj_set_style_shadow_spread(el.obj, el.shadow_spread, 0);
+    lv_obj_set_style_shadow_offset_x(el.obj, el.shadow_ox, 0);
+    lv_obj_set_style_shadow_offset_y(el.obj, el.shadow_oy, 0);
+    lv_obj_set_style_shadow_color(el.obj, lv_color_hex(col_val(el.shadow_col)), 0);
+    lv_obj_set_style_shadow_opa(el.obj, el.shadow_opa, 0);
   }
 }
 
 // Tear down whatever is on gauge_scr and build the currently-parsed page
 // (s_el/s_count/s_bg_json). Runs on loopTask.
 static void build_active_scene() {
+  // Slow the LCD DMA before the render burst so the bounce buffer can't underrun
+  // (an underrun slips the DMA phase = vertical shift). The pclk change applies on
+  // the next VSYNC, so settle briefly to guarantee it's live before ANY rendering
+  // starts (otherwise the first burst frame can still underrun at full clock).
+  // Full speed is restored in loop() once the burst has settled (lcd_resync_at_ms).
+  lcd_set_pclk(LCD_PCLK_RELOAD_HZ);
+  vTaskDelay(pdMS_TO_TICKS(30));
   lv_obj_clean(gauge_scr);
   // The built-in face's objects were just destroyed — null the shared handles
   // so loop()'s flag handlers (link icon, stats overlay, mode label...) and
@@ -485,6 +773,22 @@ static void build_active_scene() {
 
   apply_layout_background();
   for (int i = 0; i < s_count; i++) build_element(s_el[i], i);
+
+  // Recreate the perf overlay so on-glass FPS works while a layout is active
+  // (lv_obj_clean above destroyed the built-in face's perf_label). Kept on top,
+  // out of the dial centre; loop()'s STATS block drives the text.
+  perf_label = lv_label_create(gauge_scr);
+  lv_obj_align(perf_label, LV_ALIGN_TOP_MID, 0, 6);
+  lv_obj_set_style_text_color(perf_label, lv_color_white(), 0);
+  lv_obj_set_style_bg_color(perf_label, lv_color_black(), 0);
+  lv_obj_set_style_bg_opa(perf_label, 150, 0);
+  lv_label_set_text(perf_label, "FPS:--");
+  if (!show_perf_stats) lv_obj_add_flag(perf_label, LV_OBJ_FLAG_HIDDEN);
+
+  // Post-rebuild recovery (see loop()): restore full pclk after the burst, and
+  // continuously re-align the DMA for a window so any slip is corrected in a frame.
+  lcd_resync_at_ms = millis() + 400;
+  lcd_resync_until_ms = millis() + 1500;
 }
 
 // Read + parse the stored layout, build one page (page_idx, or the start page
@@ -616,20 +920,29 @@ void layout_engine_update() {
       case LE_NUMERIC: {
         float v = smoothed(el, display);
         char buf[LE_STR_MAX + 20];
-        snprintf(buf, sizeof(buf), "%s%.*f%s%s", el.str, el.decimals, v,
-                 el.unit ? " " : "", el.unit ? chan_unit_str(el.chan_idx) : "");
+        snprintf(buf, sizeof(buf), "%s%.*f", el.str, el.decimals, v);   // unit is its own label
         if (strcmp(buf, el.prev_txt) != 0) {
           lv_label_set_text(el.obj, buf);
           strlcpy(el.prev_txt, buf, sizeof(el.prev_txt));
-          place_label(el, buf);   // re-anchor: width changes with the text
+          place_numeric(el, buf);   // re-anchor value (+unit): width changes with the text
         }
         break;
       }
       case LE_NEEDLE: {
-        float v = smoothed(el, display);
+        float v;
+        if (el.peak_src) { if (display > el.peak) el.peak = display; v = el.peak; }
+        else v = smoothed(el, display);
         float norm = (v - el.min) / (el.max - el.min);
         norm = norm < 0 ? 0 : norm > 1 ? 1 : norm;
-        float rad = (el.start_deg + norm * el.sweep_deg) * (float)M_PI / 180.0f;
+        float deg = el.start_deg + norm * el.sweep_deg;
+        if (el.img_needle) {   // rotate the sprite (LVGL uses 0.1° clockwise units)
+          // sprite points up (-y) at 0°; dial angle grows from +x toward +y → +90°.
+          int32_t r10 = ((int32_t)((deg + 90.0f) * 10.0f)) % 3600;
+          if (r10 < 0) r10 += 3600;
+          if (r10 != el.prev_a) { lv_image_set_rotation(el.obj, r10); el.prev_a = r10; }
+          break;
+        }
+        float rad = deg * (float)M_PI / 180.0f;
         static lv_point_precise_t pts[LE_MAX_ELEMENTS][2];   // persist per element
         int32_t x0 = el.cx + (int)(el.r0 * cosf(rad)), y0 = el.cy + (int)(el.r0 * sinf(rad));
         int32_t x1 = el.cx + (int)(el.r1 * cosf(rad)), y1 = el.cy + (int)(el.r1 * sinf(rad));
@@ -652,22 +965,58 @@ void layout_engine_update() {
       }
       case LE_BAR: {
         float v = smoothed(el, display);
-        float norm = (v - el.min) / (el.max - el.min);
-        norm = norm < 0 ? 0 : norm > 1 ? 1 : norm;
-        int32_t fill = (int32_t)((el.horiz ? el.w : el.h) * norm);
+        int32_t span = el.horiz ? el.w : el.h;
+        auto px = [&](float val) -> int32_t {
+          float n = (val - el.min) / (el.max - el.min);
+          n = n < 0 ? 0 : n > 1 ? 1 : n;
+          return (int32_t)(span * n);
+        };
+        int32_t vp = px(v);
+        int32_t lo, hi;
+        if (el.has_origin) { int32_t op = px(el.origin); lo = op < vp ? op : vp; hi = op < vp ? vp : op; }
+        else { lo = 0; hi = vp; }
+        int32_t raw = hi - lo;                 // 0 = empty
+        int32_t len = raw < 1 ? 1 : raw;
         uint32_t c = zone_col(el, v);
-        if (fill != el.prev_a || c != el.prev_col) {
+        int32_t hash = (lo << 16) | (len & 0xFFFF);
+        if (hash != el.prev_a || c != el.prev_col) {
           if (el.horiz) {
-            lv_obj_set_pos(el.obj2, el.x, el.y);
-            lv_obj_set_size(el.obj2, fill > 0 ? fill : 1, el.h);
+            lv_obj_set_pos(el.obj2, el.x + lo, el.y);
+            lv_obj_set_size(el.obj2, len, el.h);
           } else {
-            lv_obj_set_pos(el.obj2, el.x, el.y + el.h - fill);
-            lv_obj_set_size(el.obj2, el.w, fill > 0 ? fill : 1);
+            lv_obj_set_pos(el.obj2, el.x, el.y + el.h - hi);
+            lv_obj_set_size(el.obj2, el.w, len);
           }
-          lv_obj_set_style_bg_opa(el.obj2, fill > 0 ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
+          lv_obj_set_style_bg_opa(el.obj2, raw > 0 ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
           lv_obj_set_style_bg_color(el.obj2, lv_color_hex(c), 0);
-          el.prev_a = fill; el.prev_col = c;
+          el.prev_a = hash; el.prev_col = c;
         }
+        break;
+      }
+      case LE_SHIFT: {
+        float v = smoothed(el, display);
+        int32_t lit = 0;
+        for (int s = 0; s < el.segs; s++) {
+          float thr = el.min + (s + 1) * (el.max - el.min) / el.segs;
+          if (v >= thr) lit |= (1 << s);
+        }
+        // flash phase: -1 = not flashing, 0 = blink-off, 1 = blink-on (all lit)
+        int32_t flash = (el.flash_max && v >= el.max) ? (int32_t)((millis() / 110) & 1) : -1;
+        if (lit != el.prev_a || flash != el.prev_b) {
+          uint32_t count = lv_obj_get_child_count(el.obj);
+          for (uint32_t s = 0; s < count; s++) {
+            bool on = (lit >> s) & 1;
+            if (flash == 0) on = false;
+            else if (flash == 1) on = true;
+            lv_obj_set_style_bg_opa(lv_obj_get_child(el.obj, s), on ? LV_OPA_COVER : LV_OPA_TRANSP, 0);
+          }
+          el.prev_a = lit; el.prev_b = flash;
+        }
+        break;
+      }
+      case LE_LED: {
+        int32_t on = display >= el.led_on ? 1 : 0;
+        if (on != el.prev_a) { if (on) lv_led_on(el.obj); else lv_led_off(el.obj); el.prev_a = on; }
         break;
       }
       case LE_WARNING: {

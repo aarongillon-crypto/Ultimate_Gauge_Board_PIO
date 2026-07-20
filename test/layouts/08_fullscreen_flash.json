@@ -1,0 +1,12 @@
+{
+  "schema": "ugb-layout", "v": 1,
+  "meta": { "name": "fullscreen-flash (tier3)" },
+  "canvas": { "w": 480, "h": 480, "round": true },
+  "start_page": 0,
+  "pages": [{ "id": 0, "elements": [
+    { "type": "numeric", "chan": 13824, "x": 240, "y": 240, "font": "dseg14_120",
+      "color": "#ffffff", "decimals": 0, "align": "center" },
+    { "type": "alert", "color": "#ff0000", "mode": "fullscreen", "opa": 110, "pulse": true,
+      "visible_if": { "chan": 13824, "op": ">", "value": 5000 } }
+  ]}]
+}

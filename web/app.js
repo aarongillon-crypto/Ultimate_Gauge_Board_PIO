@@ -50,6 +50,11 @@ function renderState(s){
   if (document.activeElement !== $('sec')) $('sec').value = s.sec;
   if (!$('newname').value) $('newname').value = s.name;
   $('footer').textContent = 'v' + s.fw + ' · built ' + s.build;
+  if (s.fps !== undefined) {
+    $('perf').textContent = 'FPS ' + s.fps + ' · LV ' + s.lvMs + 'ms · R ' + s.rMs +
+      'ms · UI ' + s.uiMs + 'ms · heap ' + (s.heapInt/1024).toFixed(0) + 'K (min ' +
+      (s.heapMin/1024).toFixed(0) + 'K)' + (s.layoutActive ? ' · layout:' + s.layoutName : '');
+  }
   if (themesCache && themesCache.active !== s.slot) loadThemes();  // rotary moved the slot
 }
 function setTgl(id, label, on){

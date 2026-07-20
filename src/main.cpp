@@ -197,11 +197,33 @@ void setup() {
 void loop() {
   unsigned long lvgl_t = millis();
   lv_timer_handler();
-  if (show_perf_stats) perf_lvgl_ms = millis() - lvgl_t;
+  perf_lvgl_ms = millis() - lvgl_t;   // always measured — feeds /api/state readout
   web_pump();
 
   // --- FLAG HANDLERS (loopTask owns globals/LVGL/NVS — everything lands here) ---
   if (reboot_at_ms && (int32_t)(millis() - reboot_at_ms) >= 0) ESP.restart();
+
+  // Post-rebuild recovery. A scene rebuild (layout push/page/theme, or revert to
+  // the built-in face) bursts PSRAM traffic that can underrun the bounce buffer
+  // and slip the RGB DMA phase = vertical shift. Two-part mitigation:
+  //  (1) the rebuild drops the pixel clock so the burst is less likely to underrun;
+  //      restore full clock once it has settled.
+  if (lcd_resync_at_ms && (int32_t)(millis() - lcd_resync_at_ms) >= 0) {
+      lcd_resync_at_ms = 0;
+      lcd_set_pclk(LCD_PCLK_NORMAL_HZ);
+  }
+  //  (2) software RESTART_IN_VSYNC: re-align the DMA every frame for a window after
+  //      the rebuild. A one-shot resync only catches a slip that already happened;
+  //      calling restart repeatedly (as the sdkconfig option does internally) fixes
+  //      a slip whenever it occurs during the burst/settle. Idempotent when aligned.
+  if (lcd_resync_until_ms) {
+      if ((int32_t)(millis() - lcd_resync_until_ms) >= 0) {
+          lcd_resync_until_ms = 0;
+      } else {
+          static uint32_t last_rs = 0;
+          if (millis() - last_rs >= 25) { last_rs = millis(); lcd_resync(); }  // ~once/frame
+      }
+  }
 
   // Staged theme changes from other tasks (ESP-NOW colours, trimpot slot switch):
   // applied to globals + slots + NVS here, then flag_theme_update repaints.
@@ -252,7 +274,10 @@ void loop() {
       // the compiled-in default face.
       if (!(layout_enabled && layout_engine_load())) {
           layout_engine_unload();
+          lcd_set_pclk(LCD_PCLK_RELOAD_HZ);   // built-in face rebuild also bursts
           load_current_style();
+          lcd_resync_at_ms = millis() + 400;      // restore clock after burst
+          lcd_resync_until_ms = millis() + 1500;  // continuous re-align window
       }
   }
   if (pending_layout_page >= 0) {   // layout page switch staged from /api/layout/page
@@ -304,14 +329,16 @@ void loop() {
   }
 
   // --- STATS LOGIC ---
-  if (show_perf_stats && perf_label) {
-      perf_frames++;
-      if (millis() - perf_last_time >= 1000) {
-          perf_fps = perf_frames;
-          perf_frames = 0;
-          perf_last_time = millis();
+  // FPS is counted every frame (not gated on the overlay) so /api/state stays
+  // live for cost measurement even when a custom layout is active. The on-screen
+  // overlay is updated only when it exists and stats are enabled.
+  perf_frames++;
+  if (millis() - perf_last_time >= 1000) {
+      perf_fps = perf_frames;
+      perf_frames = 0;
+      perf_last_time = millis();
+      if (show_perf_stats && perf_label)
           lv_label_set_text_fmt(perf_label, "FPS:%d LV:%d R:%d UI:%d", perf_fps, perf_lvgl_ms, lvgl_render_ms, perf_frame_ms);
-      }
   }
 
   if (millis() - last_broadcast > 2000) {
@@ -346,7 +373,7 @@ void loop() {
           else update_gauge_master();
       }
 
-      if(show_perf_stats) perf_frame_ms = millis() - start;
+      perf_frame_ms = millis() - start;   // always measured — feeds /api/state readout
   }
   yield();
 }

@@ -1,0 +1,15 @@
+{
+  "schema": "ugb-layout", "v": 1,
+  "meta": { "name": "bar-symmetric" },
+  "canvas": { "w": 480, "h": 480, "round": true },
+  "start_page": 0,
+  "pages": [{ "id": 0, "elements": [
+    { "type": "text", "x": 240, "y": 185, "str": "BOOST", "font": "montserrat_20",
+      "color": "#888888", "align": "center" },
+    { "type": "bar", "chan": 13826, "x": 90, "y": 215, "w": 300, "h": 40,
+      "min": -15, "max": 30, "origin": 0, "z1": 0, "z2": 18, "radius": 6,
+      "track": "#202020", "low": "#3060ff", "mid": "#00d000", "high": "#ff3030" },
+    { "type": "numeric", "chan": 13826, "x": 240, "y": 300, "font": "firamono_96",
+      "color": "#ffffff", "decimals": 1, "unit": true, "align": "center" }
+  ]}]
+}

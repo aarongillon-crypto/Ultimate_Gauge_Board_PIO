@@ -38,6 +38,17 @@
    #define ESP_PANEL_LCD_RGB_TIMING_VBP              (16)
    #define ESP_PANEL_LCD_RGB_TIMING_VFP              (16)
    #define ESP_PANEL_LCD_RGB_FRAME_BUF_NUM           (2)     // 1/2/3
+   // Bounce buffer (internal-SRAM prefetch of the PSRAM framebuffer). Fully mapped
+   // trade-off on this board:
+   //   ON  (small) -> no flicker, but a full-screen rebuild burst can underrun it
+   //                  and slip the DMA VSYNC phase = a persistent vertical shift on
+   //                  layout reload (magnitude == bounce size; bigger made it WORSE).
+   //   OFF (0)     -> no shift, but the LCD FIFO underruns on ANY movement (PSRAM
+   //                  latency-bound, not throughput — lowering pclk barely helped)
+   //                  = constant flicker. Worse for daily use.
+   // Kept ON @ 20 rows: flicker-free normal operation; the reload shift is a design-
+   // time-only artifact. Definitive cure = CONFIG_LCD_RGB_RESTART_IN_VSYNC (auto
+   // re-align every VSYNC) via a custom sdkconfig rebuild — see the display notes.
    #define ESP_PANEL_LCD_RGB_BOUNCE_BUF_SIZE         (ESP_PANEL_LCD_WIDTH * 20)
 
    // ... (Pin definitions remain the same) ...
@@ -77,6 +88,14 @@
    // Re-align RGB DMA to VSYNC (fixes intermittent vertical-shift-at-boot).
    // Call once after the framebuffer has valid content, backlight still off.
    esp_err_t lcd_resync();
+
+   // Change the pixel clock at runtime (applied on the next VSYNC). Used to
+   // briefly slow the LCD DMA during a layout rebuild burst so the bounce buffer
+   // can't underrun (which would slip the DMA phase = vertical shift), then
+   // restore full speed. See LCD_PCLK_* below.
+   void lcd_set_pclk(uint32_t hz);
+   #define LCD_PCLK_NORMAL_HZ   ESP_PANEL_LCD_RGB_TIMING_FREQ_HZ   // 12 MHz
+   #define LCD_PCLK_RELOAD_HZ   (4 * 1000 * 1000)                  // during rebuild burst
    void lcd_add_window(uint16_t Xstart, uint16_t Xend, uint16_t Ystart, uint16_t Yend,
  uint8_t *color);
 

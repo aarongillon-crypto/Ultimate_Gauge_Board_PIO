@@ -1,0 +1,30 @@
+{
+  "schema": "ugb-layout", "v": 1,
+  "meta": { "name": "STRESS (combined)" },
+  "canvas": { "w": 480, "h": 480, "round": true },
+  "start_page": 0,
+  "pages": [{ "id": 0, "elements": [
+    { "type": "scale", "cx": 240, "cy": 240, "r": 222, "min": 0, "max": 8000,
+      "major": 9, "minor": 4, "labels": true, "font": "montserrat_20",
+      "color": "#cccccc", "maj_len": 18, "min_len": 9, "tick_w": 3,
+      "sec_from": 6500, "sec_to": 8000, "sec_color": "#ff2020" },
+    { "type": "shiftlights", "chan": 13824, "x": 130, "y": 44,
+      "min": 3000, "max": 7500, "z1": 5500, "z2": 6800,
+      "segs": 10, "seg_w": 18, "seg_h": 22, "gap": 4, "radius": 3,
+      "low": "#00ff00", "mid": "#ffaa00", "high": "#ff0000", "flash_max": true },
+    { "type": "needle", "chan": 13824, "min": 0, "max": 8000,
+      "cx": 240, "cy": 240, "r0": 28, "r1": 168, "width": 6, "color": "#ffffff",
+      "start_deg": 135, "sweep_deg": 270 },
+    { "type": "needle", "chan": 13824, "source": "peak", "min": 0, "max": 8000,
+      "cx": 240, "cy": 240, "r0": 170, "r1": 196, "width": 4, "color": "#ff3030",
+      "start_deg": 135, "sweep_deg": 270 },
+    { "type": "numeric", "chan": 13824, "x": 240, "y": 300, "font": "firamono_96",
+      "color": "#ffffff", "decimals": 0, "align": "center" },
+    { "type": "bar", "chan": 13826, "x": 140, "y": 360, "w": 200, "h": 22,
+      "min": -15, "max": 30, "origin": 0, "z1": 0, "z2": 18, "radius": 4,
+      "track": "#202020", "low": "#3060ff", "mid": "#00d000", "high": "#ff3030" },
+    { "type": "image", "icon": "oil",     "x": 150, "y": 398, "recolor": "#ff3030", "pulse": true },
+    { "type": "image", "icon": "coolant", "x": 224, "y": 398, "recolor": "#30a0ff" },
+    { "type": "image", "icon": "battery", "x": 298, "y": 398, "recolor": "#ffd020" }
+  ]}]
+}

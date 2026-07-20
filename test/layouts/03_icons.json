@@ -1,0 +1,15 @@
+{
+  "schema": "ugb-layout", "v": 1,
+  "meta": { "name": "icons" },
+  "canvas": { "w": 480, "h": 480, "round": true },
+  "start_page": 0,
+  "pages": [{ "id": 0, "elements": [
+    { "type": "text", "x": 240, "y": 150, "str": "TELLTALES", "font": "montserrat_20",
+      "color": "#888888", "align": "center" },
+    { "type": "image", "icon": "oil",     "x": 64,  "y": 224, "recolor": "#ff3030", "pulse": true },
+    { "type": "image", "icon": "coolant", "x": 144, "y": 224, "recolor": "#30a0ff" },
+    { "type": "image", "icon": "battery", "x": 224, "y": 224, "recolor": "#ffd020" },
+    { "type": "image", "icon": "engine",  "x": 304, "y": 224, "recolor": "#ff8000" },
+    { "type": "image", "icon": "fuel",    "x": 384, "y": 224, "recolor": "#ffffff" }
+  ]}]
+}

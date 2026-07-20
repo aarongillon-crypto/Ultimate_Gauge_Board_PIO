@@ -9,9 +9,9 @@
 // Bump FIRMWARE_VERSION on each release. FIRMWARE_BUILD is stamped automatically
 // by the compiler every build, so it always changes even if the version is not
 // bumped -- use it to confirm an OTA upload actually took effect.
-#define FIRMWARE_VERSION "2.7.0"
+#define FIRMWARE_VERSION "2.8.0"
 #define FIRMWARE_VER_MAJOR 2
-#define FIRMWARE_VER_MINOR 7
+#define FIRMWARE_VER_MINOR 8
 #define FIRMWARE_VER_PATCH 0
 #define FIRMWARE_BUILD   __DATE__ " " __TIME__
 
@@ -119,6 +119,10 @@ extern int perf_lvgl_ms;
 // applies AND persists them (no NVS in callback context).
 extern volatile bool flag_new_peer;
 extern volatile uint32_t reboot_at_ms;  // deferred reboot deadline (0 = none)
+extern volatile uint32_t lcd_resync_at_ms; // deferred RGB DMA/VSYNC re-align after a
+                                        // scene rebuild slips the phase (0 = none)
+extern volatile uint32_t lcd_resync_until_ms; // continuously re-align the RGB DMA until
+                                        // this ms after a rebuild (SW RESTART_IN_VSYNC; 0 = none)
 extern volatile bool flag_theme_update;
 extern volatile bool flag_bright_update;
 extern volatile bool flag_stats_update;

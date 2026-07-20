@@ -1,0 +1,13 @@
+{
+  "schema": "ugb-layout", "v": 1,
+  "meta": { "name": "blur-shadow (tier3)" },
+  "canvas": { "w": 480, "h": 480, "round": true },
+  "start_page": 0,
+  "pages": [{ "id": 0, "elements": [
+    { "type": "shape", "shape": "rect", "x": 140, "y": 190, "w": 200, "h": 100, "radius": 16,
+      "fill": "#2040a0",
+      "shadow": { "w": 30, "spread": 4, "x": 0, "y": 8, "color": "#000000", "opa": 200 } },
+    { "type": "text", "x": 240, "y": 240, "str": "SHADOW", "font": "montserrat_28",
+      "color": "#ffffff", "align": "center" }
+  ]}]
+}

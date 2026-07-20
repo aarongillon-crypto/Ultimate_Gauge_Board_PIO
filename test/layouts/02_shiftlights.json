@@ -1,0 +1,16 @@
+{
+  "schema": "ugb-layout", "v": 1,
+  "meta": { "name": "shiftlights" },
+  "canvas": { "w": 480, "h": 480, "round": true },
+  "start_page": 0,
+  "pages": [{ "id": 0, "elements": [
+    { "type": "shiftlights", "chan": 13824, "x": 87, "y": 70,
+      "min": 3000, "max": 7500, "z1": 5500, "z2": 6800,
+      "segs": 12, "seg_w": 20, "seg_h": 36, "gap": 6, "radius": 3,
+      "low": "#00ff00", "mid": "#ffaa00", "high": "#ff0000", "flash_max": true },
+    { "type": "numeric", "chan": 13824, "x": 240, "y": 260, "font": "dseg14_120",
+      "color": "#ff3030", "decimals": 0, "align": "center" },
+    { "type": "text", "x": 240, "y": 340, "str": "RPM", "font": "montserrat_20",
+      "color": "#888888", "align": "center" }
+  ]}]
+}

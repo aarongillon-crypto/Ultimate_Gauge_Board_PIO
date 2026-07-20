@@ -63,6 +63,8 @@ int perf_lvgl_ms = 0;
 
 volatile bool flag_new_peer = false;
 volatile uint32_t reboot_at_ms = 0;
+volatile uint32_t lcd_resync_at_ms = 0;
+volatile uint32_t lcd_resync_until_ms = 0;
 volatile bool flag_theme_update = false;
 volatile bool flag_bright_update = false;
 volatile bool flag_stats_update = false;

@@ -8,6 +8,7 @@
 #include "../ui/layout_engine.h"
 #include "CANBus_Driver.h"
 #include "Display_ST7701.h"
+#include "LVGL_Driver.h"   // lvgl_render_ms (perf readout)
 #include <ArduinoJson.h>
 #include <uri/UriBraces.h>
 
@@ -48,6 +49,13 @@ static void apiState() {
   doc["canOk"] = canbus_ok;
   doc["uptime"] = millis() / 1000;
   doc["heap"] = ESP.getFreeHeap();
+  // --- perf/heap telemetry (measurement harness): live regardless of face ---
+  doc["heapInt"] = heap_caps_get_free_size(MALLOC_CAP_INTERNAL);
+  doc["heapMin"] = heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL);
+  doc["fps"]  = perf_fps;         // frames/sec (counted every frame now)
+  doc["lvMs"] = perf_lvgl_ms;     // lv_timer_handler() time
+  doc["rMs"]  = (int)lvgl_render_ms;   // flush/DMA render time (excl. vsync wait)
+  doc["uiMs"] = perf_frame_ms;    // gauge/layout update time
   doc["layoutActive"] = layout_engine_active();
   if (layout_engine_active()) {
     doc["layoutName"] = layout_engine_name();

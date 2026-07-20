@@ -147,6 +147,21 @@
 </div>
 
 <div class="card">
+  <h3>CAN Bus</h3>
+  <div class="crow"><label>Bus speed</label>
+    <select id="canbaud" onchange="setBaud(this.value)">
+      <option value="1000000">1 Mbit — Haltech</option>
+      <option value="500000">500 kbit — Evo / OEM</option>
+      <option value="250000">250 kbit — OEM</option>
+    </select>
+  </div>
+  <small><b>1 Mbit</b> = Haltech bus: normal gauge decode + non-Haltech sniffer below.
+  <b>500/250 kbit</b> = foreign/OEM bus (e.g. Evo X): Haltech decode is skipped and
+  <em>every</em> frame is shown raw in the sniffer — gauge channels won't populate until
+  a decoder for that car exists. Changing this <b>restarts the device</b> to re-init CAN.</small>
+</div>
+
+<div class="card">
   <h3>CAN Sniffer (non-Haltech)</h3>
   <button id="sniffbtn" onclick="toggleSniff()">Show non-Haltech CAN frames</button>
   <div id="sniffchans" class="hidden" style="margin-top:9px;font-family:monospace;font-size:12px"></div>

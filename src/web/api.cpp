@@ -41,6 +41,7 @@ static void apiState() {
   doc["dbg"] = debug_mode_enabled;
   doc["peak"] = peak_hold_enabled;
   doc["sec"] = secondary_chan;
+  doc["canBaud"] = can_bitrate;
   doc["slot"] = active_theme;
   doc["tpsync"] = trimpot_theme_sync;
   doc["peers"] = fleet_count;
@@ -551,6 +552,13 @@ static void apiAction() {
     } else {
       srv->send(400, "text/plain", "Name must be 1-20 characters");
     }
+  } else if (name == "canbaud") {
+    uint32_t b = (uint32_t)strtoul(v.c_str(), nullptr, 10);
+    if (b != 250000 && b != 500000 && b != 1000000) { srv->send(400, "text/plain", "Bad baud"); return; }
+    can_bitrate = b;
+    cfg_put_uint("canbaud", b);
+    srv->send(200, "text/plain", String(b));
+    reboot_at_ms = millis() + 400;   // re-init TWAI cleanly at the new speed on reboot
   } else if (name == "reboot") {
     srv->send(200, "text/plain", "OK");
     reboot_at_ms = millis() + 400;

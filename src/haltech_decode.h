@@ -42,9 +42,8 @@ struct CanSniffSlot {
 // Iterate all entries; skip those with .count == 0 (unused slots).
 const CanSniffSlot* cansniff_table(int* count);
 
-// Human-readable label for a known CAN ID, or nullptr if unknown. On the
-// Evo-X discovery build (EVO_SNIFFER) this returns starter labels for known
-// Mitsubishi Evo X (CZ4A) IDs so the sniffer isn't a wall of raw hex; on the
-// normal Haltech build it always returns nullptr (registry frames are decoded,
-// not sniffed). Labels are community-sourced and UNVERIFIED — confirm on car.
+// Human-readable label for a known CAN ID, or nullptr if unknown. Returns starter
+// labels for known foreign/OEM IDs (currently Mitsubishi Evo X CZ4A) so the sniffer
+// isn't a wall of raw hex when the bus is switched to 500 kbit. Labels are
+// community-sourced and UNVERIFIED — confirm on car. Harmless on the Haltech bus.
 const char* can_label(uint16_t id);

@@ -9,10 +9,10 @@
 // Bump FIRMWARE_VERSION on each release. FIRMWARE_BUILD is stamped automatically
 // by the compiler every build, so it always changes even if the version is not
 // bumped -- use it to confirm an OTA upload actually took effect.
-#define FIRMWARE_VERSION "2.6.2"
+#define FIRMWARE_VERSION "2.7.0"
 #define FIRMWARE_VER_MAJOR 2
-#define FIRMWARE_VER_MINOR 6
-#define FIRMWARE_VER_PATCH 2
+#define FIRMWARE_VER_MINOR 7
+#define FIRMWARE_VER_PATCH 0
 #define FIRMWARE_BUILD   __DATE__ " " __TIME__
 
 // --- MODES / PAGES ---
@@ -78,6 +78,7 @@ enum DimSource : uint8_t { DIM_SRC_HALTECH = 0, DIM_SRC_GLOWCRAFT = 1, DIM_SRC_E
 extern uint8_t dim_source;              // NVS "dimsrc" — DimSource (default EITHER)
 extern uint8_t current_font;
 extern uint16_t secondary_chan;   // chan_key of the secondary readout (0 = none)
+extern uint32_t can_bitrate;      // NVS "canbaud" — CAN bus speed (1000000 Haltech / 500000 Evo/OEM / 250000)
 
 // --- LIVE COLOURS (owned by loopTask) ---
 extern uint32_t text_color;

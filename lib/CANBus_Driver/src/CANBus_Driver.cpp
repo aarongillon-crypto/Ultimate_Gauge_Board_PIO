@@ -7,6 +7,10 @@
 // power cycle) — the gauge comes up CAN-less and canbus_recover() retries.
 bool canbus_ok = false;
 
+// Selected bus speed. Default 1 Mbit (Haltech); set from NVS before canbus_init().
+static uint32_t s_bitrate = 1000000;
+void canbus_set_bitrate(uint32_t bps) { s_bitrate = bps; }
+
 // Full (re)install attempt — used at boot and again from canbus_recover()
 // if the driver never came up (e.g. transceiver fault at key-on).
 static bool canbus_try_install(void) {
@@ -15,13 +19,12 @@ static bool canbus_try_install(void) {
     // Bursts overflowed it and silently dropped frames, including low-rate ones
     // like Rotary Trim 3 (0x3E4, 5 Hz) that drive theme-sync. Deepen the queue.
     g_config.rx_queue_len = 32;
-#ifdef EVO_SNIFFER
-    // Mitsubishi Evo X (CZ4A) OEM powertrain bus is fixed at 500 kbit, not the
-    // 1 Mbit Haltech bus. See [env:evo-sniffer] in platformio.ini.
-    twai_timing_config_t t_config = TWAI_TIMING_CONFIG_500KBITS();
-#else
-    twai_timing_config_t t_config = TWAI_TIMING_CONFIG_1MBITS();
-#endif
+    twai_timing_config_t t_config;
+    switch (s_bitrate) {
+        case 250000:  t_config = TWAI_TIMING_CONFIG_250KBITS(); break;  // some OEM buses
+        case 500000:  t_config = TWAI_TIMING_CONFIG_500KBITS(); break;  // Evo/OEM powertrain
+        default:      t_config = TWAI_TIMING_CONFIG_1MBITS();   break;  // Haltech (1 Mbit)
+    }
     twai_filter_config_t f_config = TWAI_FILTER_CONFIG_ACCEPT_ALL();  // Accept all IDs
 
     if (twai_driver_install(&g_config, &t_config, &f_config) != ESP_OK) return false;

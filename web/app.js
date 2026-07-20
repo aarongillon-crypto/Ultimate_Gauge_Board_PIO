@@ -37,6 +37,7 @@ function renderState(s){
   $('dimval').textContent = s.dimBright; $('dimbright').value = s.dimBright;
   setTgl('dimen', 'Dim on Park Light', s.dimEn);
   if (document.activeElement !== $('dimsrc')) $('dimsrc').value = s.dimSrc;
+  if (s.canBaud && document.activeElement !== $('canbaud')) $('canbaud').value = s.canBaud;
   setTgl('test', 'Test', s.test); setTgl('stats', 'Stats', s.stats);
   setTgl('dbg', 'Debug', s.dbg); setTgl('peak', 'Peak Hold', s.peak);
   $('font').textContent = 'Font: ' + (s.font === 0 ? 'DSEG14' : 'Fira Mono');
@@ -277,6 +278,10 @@ function renderSniff(d){
   }).join('');
 }
 function loadSniff(){ return jget('/api/cansniff').then(renderSniff).catch(function(){}); }
+function setBaud(v){
+  toast('Switching CAN to ' + (v/1000) + ' kbit, restarting…');
+  act('canbaud', '?v=' + v);
+}
 function toggleSniff(){
   sniffOpen = !sniffOpen;
   $('sniffchans').classList.toggle('hidden', !sniffOpen);

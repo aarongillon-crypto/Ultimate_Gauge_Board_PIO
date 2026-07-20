@@ -32,17 +32,15 @@ Target is selected at **compile time** via PlatformIO envs — one web UI, two f
 
 ---
 
-## 3. Current State (what's shipped)
+## 3. Current State (what's shipped — v2.7.0, `feature/glowcraft-integration`)
 
-**Branch `scratch/evo-sniffer-500k`** (NOT merged, changes uncommitted):
+Bus speed is a **runtime setting**, not a build flag — one firmware covers both cars. (Superseded the earlier `[env:evo-sniffer]` compile-time approach; that scratch branch is folded in.)
 
-- New PlatformIO env `[env:evo-sniffer]` (`-D EVO_SNIFFER`) — same firmware, but:
-  - CAN at **500 kbit** (`CANBus_Driver.cpp`).
-  - Decode task captures **every** frame raw (the Haltech registry is meaningless on a foreign bus and would mis-claim overlapping IDs like `0x380`, hiding them).
-  - `SNIFF_SLOTS` bumped 16 → 48 (a whole car bus has many more distinct IDs).
-  - `can_label()` starter labels shown next to known IDs in the web **CAN Sniffer** card / `GET /api/cansniff`.
-- Default Haltech env verified still builds (byte-identical behaviour; all changes are `#ifdef EVO_SNIFFER`).
-- Binaries: `releases/evo-sniffer-500k.bin` (app-only, for OTA) and `releases/evo-sniffer-500k.factory.bin` (full image for a fresh board — a blank board needs this, not the app-only bin).
+- **Web "CAN Bus" card** → selectable speed: **1 Mbit (Haltech)** / **500 kbit (Evo/OEM)** / 250 kbit. Persisted to NVS (`canbaud`); changing it **restarts the device** to re-init TWAI cleanly. Action `POST /api/action/canbaud?v=<bps>`; reported in `/api/state` as `canBaud`.
+- Boot reads the speed early (`cfg_peek_can_bitrate()`) and calls `canbus_set_bitrate()` **before** `drivers_init()` (CAN installs there, ahead of the full `cfg_load_all`).
+- **Decode behaviour keys off the speed** (`haltech_decode.cpp`): at **1 Mbit** = normal Haltech registry decode + non-Haltech sniffer; at **any other speed** = Haltech decode skipped, **every** frame captured raw (the registry would mis-claim overlapping IDs like `0x380` and hide them). `SNIFF_SLOTS` = 48; `can_label()` starter labels always compiled.
+- **On 500 kbit the gauge face won't populate** — there's no Evo channel decoder yet; the sniffer is the tool. That's expected for discovery mode.
+- Binaries: `releases/v2.7.0.bin` (app-only, OTA) and `releases/v2.7.0.factory.bin` (full image for a fresh board — a blank board needs this, not the app-only bin).
 
 **Field note:** a "no WiFi AP" scare on first flash was two red herrings — (a) a fresh board needs the *factory* image (bootloader+partitions+app), not the app-only bin; (b) the test board had **no antenna fitted**, so the AP barely radiated. Firmware was fine. Native USB-CDC also loses the one-time boot banner (CDC enumerates ~1–2 s into boot), so serial silence is **not** a crash signal on this hardware — use the screen (backlit/gauge UI = past `drivers_init`) as the boot-progress signal instead.
 
@@ -97,8 +95,8 @@ We have the *formulas* but NOT the raw request bytes (request arbitration ID + s
 
 ### Phase 0 — On-car discovery (no new code; uses the shipped sniffer)
 **Goal:** validate the tap point and gather the raw request/response spec in one sitting.
-1. Fit antenna. Flash `evo-sniffer-500k.factory.bin` to a spare board.
-2. Wire to **OBD2 pins 6/14**, power from ignition. Connect to the AP, open the **CAN Sniffer** card.
+1. Fit antenna. Flash `v2.7.0.factory.bin` to a spare board (fresh board needs the factory image, not the app-only bin).
+2. Wire to **OBD2 pins 6/14**, power from ignition. Connect to the AP, open the **CAN Bus** card and select **500 kbit**; the gauge restarts into discovery mode. Open the **CAN Sniffer** card.
 3. Confirm broadcast frames appear at OBD2 (RPM `0x308?` moves with revs, coolant `0x608?` rises, etc.). ✅ → OBD2 is the single tap.
 4. Verify the starter labels; correct any that are wrong.
 5. Shift P-R-N-D / change drive mode / diff mode while watching — record which ID carries **gear**, **gearbox mode**, **diff mode**.

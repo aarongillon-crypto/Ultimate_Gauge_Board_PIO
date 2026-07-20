@@ -103,6 +103,9 @@ void setup() {
     vTaskDelay(pdMS_TO_TICKS(500)); // Extra settle time for panel LDOs
   }
 
+  // Pick the CAN speed from NVS before drivers_init() brings up the TWAI driver
+  // (canbus_init runs inside drivers_init, ahead of the full cfg_load_all below).
+  canbus_set_bitrate(cfg_peek_can_bitrate());
   drivers_init();
   lv_obj_set_style_bg_color(lv_scr_act(), lv_color_black(), 0);
 

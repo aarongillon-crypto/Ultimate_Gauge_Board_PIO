@@ -107,40 +107,34 @@ static void hook_3e4_trimpot(const twai_message_t* m) {
 }
 
 // ---------------- non-Haltech CAN sniffer (debug) ----------------
-#ifdef EVO_SNIFFER
-#define SNIFF_SLOTS 48    // a whole car bus has many more distinct IDs than GlowCraft
-#else
-#define SNIFF_SLOTS 16
-#endif
+#define SNIFF_SLOTS 48    // sized for a whole OEM car bus (500k mode), not just GlowCraft
 static CanSniffSlot s_sniff[SNIFF_SLOTS];
 
-// Starter labels for the Evo-X discovery build. Mitsubishi Evo X (CZ4A) OEM
-// bus @500 kbit; IDs below are community reverse-engineered (ECUMaster ADU app
-// note, EvolutionM / AutosportLabs captures, EvoScan) and are UNVERIFIED on this
-// specific car — the trailing '?' is a reminder to confirm by watching the byte
-// move on the sniffer. NOTE: SST clutch/trans temps are NOT here because they are
-// request/response PIDs (EvoScan CAN28/CAN33), not broadcast — they won't appear
-// in the sniffer at all without an active poller (that's the real finding to prove).
-#ifdef EVO_SNIFFER
-struct EvoLabel { uint16_t id; const char* name; };
-static const EvoLabel EVO_LABELS[] = {
+// Starter labels for the sniffer, only meaningful when the bus is switched to a
+// foreign/OEM speed (e.g. Evo X @500 kbit). Mitsubishi Evo X (CZ4A) IDs below are
+// community reverse-engineered (ECUMaster ADU app note, EvolutionM / AutosportLabs
+// captures, EvoScan) and are UNVERIFIED on this specific car — the trailing '?' is
+// a reminder to confirm by watching the byte move on the sniffer. NOTE: SST
+// clutch/trans temps are NOT here because they are request/response PIDs (EvoScan
+// CAN28/CAN33), not broadcast — they won't appear without an active poller.
+// Harmless on the 1 Mbit Haltech bus: Haltech IDs won't collide with these, and
+// on that bus the sniffer only shows non-Haltech frames anyway.
+struct CanLabel { uint16_t id; const char* name; };
+static const CanLabel CAN_LABELS[] = {
   { 0x308, "RPM?" },
   { 0x210, "Throttle/TPS?" },
   { 0x212, "Idle RPM target?" },
   { 0x380, "Brake/Clutch sw?" },
   { 0x415, "A/C switch?" },
   { 0x608, "Coolant/ECT?" },
-  // Semantics known but carrying-ID not yet confirmed (find by watching sniffer):
+  // Evo semantics known but carrying-ID not yet confirmed (find by watching sniffer):
   //   gear: 0=Park 8=Reverse 16=Neutral 32=Drive
   //   gearbox mode: 1=S-Sport 2=Sport 3=Normal ; diff mode: 1=Tarmac 2=Gravel 3=Snow
 };
 const char* can_label(uint16_t id) {
-  for (auto& l : EVO_LABELS) if (l.id == id) return l.name;
+  for (auto& l : CAN_LABELS) if (l.id == id) return l.name;
   return nullptr;
 }
-#else
-const char* can_label(uint16_t) { return nullptr; }
-#endif
 
 // Record a frame that the Haltech registry didn't claim. One slot per distinct
 // ID; when full, the least-recently-seen slot is recycled.
@@ -174,27 +168,28 @@ void process_can_queue_task(void *arg) {
   twai_message_t message;
   while (1) {
     if (xQueueReceive(canMsgQueue, &message, pdMS_TO_TICKS(1)) == pdPASS) {
-#ifdef EVO_SNIFFER
-      // Foreign bus (Evo X @500k): the Haltech registry is meaningless here and
-      // would mis-claim any overlapping ID (e.g. 0x380), hiding it. Capture every
-      // frame raw so nothing is lost during discovery.
-      sniff_capture(&message);
-#else
-      const IdIndex* idx = find_id((uint16_t)message.identifier);
-      if (idx) {
-        uint32_t now = millis();
-        for (int i = idx->first; i < idx->first + idx->count; i++) {
-          float v = extract_channel(HALTECH_CHANNELS[i], message.data, message.data_length_code);
-          if (!isnan(v)) { s_val[i] = v; s_seen[i] = now; }
-        }
-        if (message.identifier == 0x3E4) hook_3e4_trimpot(&message);
-      } else {
-        // GlowCraft strip-status frames (0x500+) — decoded in their own module.
-        glowcraft_decode(&message);
-        // Also latch every non-Haltech frame for the debug sniffer view.
+      if (can_bitrate != 1000000) {
+        // Foreign/OEM bus (e.g. Evo X @500k): the Haltech registry is meaningless
+        // here and would mis-claim any overlapping ID (e.g. 0x380), hiding it.
+        // Capture every frame raw so nothing is lost during discovery.
         sniff_capture(&message);
+      } else {
+        // Haltech bus (1 Mbit): registry decode, with the sniffer catching the rest.
+        const IdIndex* idx = find_id((uint16_t)message.identifier);
+        if (idx) {
+          uint32_t now = millis();
+          for (int i = idx->first; i < idx->first + idx->count; i++) {
+            float v = extract_channel(HALTECH_CHANNELS[i], message.data, message.data_length_code);
+            if (!isnan(v)) { s_val[i] = v; s_seen[i] = now; }
+          }
+          if (message.identifier == 0x3E4) hook_3e4_trimpot(&message);
+        } else {
+          // GlowCraft strip-status frames (0x500+) — decoded in their own module.
+          glowcraft_decode(&message);
+          // Also latch every non-Haltech frame for the debug sniffer view.
+          sniff_capture(&message);
+        }
       }
-#endif // EVO_SNIFFER
     }
     vTaskDelay(pdMS_TO_TICKS(1));
   }

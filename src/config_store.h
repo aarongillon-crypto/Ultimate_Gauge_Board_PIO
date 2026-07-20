@@ -13,6 +13,7 @@ void cfg_set_loop_task();
 // when no device name is stored. Returns the stored "bootok" flag (false =
 // previous boot crashed before completing — caller enters gradient safe mode).
 bool cfg_load_all(const char* defaultName);
+uint32_t cfg_peek_can_bitrate();   // early NVS read: CAN speed before cfg_load_all()
 
 // Typed single-key writers (open/write/close per call).
 void cfg_put_int(const char* key, int v);

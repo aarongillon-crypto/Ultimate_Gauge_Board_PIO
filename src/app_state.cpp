@@ -29,6 +29,7 @@ bool dim_can_enabled = false;
 uint8_t dim_source = DIM_SRC_EITHER;
 uint8_t current_font = 0;
 uint16_t secondary_chan = 0;   // chan_key, 0 = none
+uint32_t can_bitrate = 1000000;   // default Haltech 1 Mbit; overridden from NVS at boot
 
 uint32_t text_color = 0xFFD700;
 uint32_t color_low = 0x2196F3, color_mid = 0x4CAF50, color_high = 0xF44336;

@@ -140,6 +140,15 @@ void cfg_load_behavior(BehaviorConfig* out) {
   preferences.end();
 }
 
+// Read just the CAN bitrate early — canbus_init() runs in drivers_init() BEFORE
+// cfg_load_all(), so we need the persisted value before the full config load.
+uint32_t cfg_peek_can_bitrate() {
+  preferences.begin("gauge", true);
+  uint32_t b = preferences.getUInt("canbaud", 1000000);
+  preferences.end();
+  return b;
+}
+
 void cfg_mark_boot_started() { guard_task(); preferences.begin("gauge", false); preferences.putBool("bootok", false); preferences.end(); }
 void cfg_mark_boot_ok()      { guard_task(); preferences.begin("gauge", false); preferences.putBool("bootok", true);  preferences.end(); }
 
@@ -169,6 +178,7 @@ bool cfg_load_all(const char* defaultName) {
   current_font = (uint8_t)preferences.getUInt("font", 0);
   device_name = preferences.getString("devname", defaultName);
   secondary_chan = preferences.getUShort("sm2", 0);   // chan_key (old "sm" index key retired)
+  can_bitrate = preferences.getUInt("canbaud", 1000000);   // Haltech 1M default
   units_press_psi  = preferences.getBool("u_psi",  true);
   units_temp_f     = preferences.getBool("u_degf", false);
   units_speed_mph  = preferences.getBool("u_mph",  false);

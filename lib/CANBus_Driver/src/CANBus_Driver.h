@@ -4,7 +4,10 @@
 #define CAN_TX_GPIO     (gpio_num_t)5
 #define CAN_RX_GPIO     (gpio_num_t)4
 
-// Bus runs at 1 Mbit — set in CANBus_Driver.cpp via TWAI_TIMING_CONFIG_1MBITS()
+// Bus speed is runtime-selectable (Haltech = 1 Mbit, Evo/OEM = 500 kbit, etc.).
+// Call canbus_set_bitrate() BEFORE canbus_init() (and it takes effect on the next
+// install/recover). Supported: 250000, 500000, 1000000; anything else -> 1 Mbit.
+void canbus_set_bitrate(uint32_t bps);
 
 void canbus_init();
 void canbus_recover();

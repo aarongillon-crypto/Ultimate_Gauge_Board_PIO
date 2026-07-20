@@ -74,6 +74,9 @@
    void st7701_init();
 
    void lcd_init();
+   // Re-align RGB DMA to VSYNC (fixes intermittent vertical-shift-at-boot).
+   // Call once after the framebuffer has valid content, backlight still off.
+   esp_err_t lcd_resync();
    void lcd_add_window(uint16_t Xstart, uint16_t Xend, uint16_t Ystart, uint16_t Yend,
  uint8_t *color);
 

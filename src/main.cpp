@@ -162,6 +162,14 @@ void setup() {
   // Pump OTA/web here too so recovery stays possible even if a render stalls.
   for (int i = 0; i < 5; i++) { lv_timer_handler(); web_pump(); }
 
+  // Re-align the RGB DMA to VSYNC while still dark. The pixel DMA can latch a
+  // fixed vertical phase offset at startup (~20% of cold boots), showing as the
+  // whole image shifted up with wraparound until the next reset. Doing it here —
+  // after WiFi/CAN bring-up and a valid framebuffer, before the backlight — fixes
+  // the phase after peak boot contention has passed, so the shift never shows.
+  lcd_resync();
+  for (int i = 0; i < 3; i++) { lv_timer_handler(); web_pump(); }
+
   // Backlight soft-start: ramp instead of stepping straight to target. A 0->max
   // jump makes the LED boost converter draw a hard inrush right as WiFi beacons
   // + PSRAM render traffic peak — measured brownouts on bench/USB supplies at

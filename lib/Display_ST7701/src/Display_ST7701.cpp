@@ -399,8 +399,21 @@ void lcd_add_window(uint16_t Xstart, uint16_t Xend, uint16_t Ystart, uint16_t Ye
   esp_lcd_panel_draw_bitmap(panel_handle, Xstart, Ystart, Xend, Yend, color);
 }
 
+// Re-align the RGB GDMA to the VSYNC timing generator. On the ESP32-S3 the
+// pixel DMA can latch a fixed number of lines out of phase with VSYNC at
+// startup (worst during boot-time PSRAM/flash/WiFi contention), which shows as
+// the whole image shifted vertically with wraparound for the rest of the
+// session — cured only by a reset. Calling this after the framebuffer holds
+// valid content, while the backlight is still off, resyncs the phase so the
+// shift never becomes visible. Framebuffer content is preserved (same FB is
+// re-linked), so no re-render is needed. Safe no-op if the panel isn't up.
+esp_err_t lcd_resync() {
+  if (panel_handle == NULL) return ESP_ERR_INVALID_STATE;
+  return esp_lcd_rgb_panel_restart(panel_handle);
+}
+
 void backlight_init() {
-  ledcAttach(LCD_BACKLIGHT_PIN, frequency, resolution);  
+  ledcAttach(LCD_BACKLIGHT_PIN, frequency, resolution);
 }
 
 void set_backlight(uint8_t light) {

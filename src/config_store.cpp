@@ -179,6 +179,7 @@ bool cfg_load_all(const char* defaultName) {
   device_name = preferences.getString("devname", defaultName);
   secondary_chan = preferences.getUShort("sm2", 0);   // chan_key (old "sm" index key retired)
   can_bitrate = preferences.getUInt("canbaud", 1000000);   // Haltech 1M default
+  layout_follows_theme = preferences.getBool("lyfth", false);
   units_press_psi  = preferences.getBool("u_psi",  true);
   units_temp_f     = preferences.getBool("u_degf", false);
   units_speed_mph  = preferences.getBool("u_mph",  false);

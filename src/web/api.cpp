@@ -43,6 +43,7 @@ static void apiState() {
   doc["peak"] = peak_hold_enabled;
   doc["sec"] = secondary_chan;
   doc["canBaud"] = can_bitrate;
+  doc["lyfth"] = layout_follows_theme;
   doc["slot"] = active_theme;
   doc["tpsync"] = trimpot_theme_sync;
   doc["peers"] = fleet_count;
@@ -523,6 +524,12 @@ static void apiAction() {
     if (peak_hold_enabled) { peak_val = -999.0f; peak_low_val = 999.0f; }
     cfg_put_bool("peak", peak_hold_enabled);
     srv->send(200, "text/plain", peak_hold_enabled ? "1" : "0");
+  } else if (name == "lyfth") {   // couple theme-slot switch to layout page switch
+    layout_follows_theme = !layout_follows_theme;
+    cfg_put_bool("lyfth", layout_follows_theme);
+    if (layout_follows_theme && layout_engine_active() && active_theme < (uint8_t)layout_engine_page_count())
+      pending_layout_page = active_theme;   // apply immediately (staged for loopTask)
+    srv->send(200, "text/plain", layout_follows_theme ? "1" : "0");
   } else if (name == "font") {
     current_font = (current_font == 0) ? 1 : 0;
     cfg_put_uint("font", current_font);

@@ -152,6 +152,9 @@ void setup() {
   // Stored layout (if present, enabled, and valid) replaces the built-in face;
   // any failure falls back to the compiled-in default (never a blank screen).
   if (!(layout_enabled && layout_engine_load())) load_current_style();
+  // Coupled skins: start on the page matching the active theme slot, not start_page.
+  if (layout_follows_theme && layout_engine_active() && active_theme < (uint8_t)layout_engine_page_count())
+    layout_engine_set_page(active_theme);
   build_glowcraft_page();
   apply_page();               // load whichever page was last selected
 
@@ -287,8 +290,18 @@ void loop() {
   }
   if (flag_theme_update) {
       flag_theme_update = false;
-      if (layout_engine_active()) layout_engine_theme_changed();  // re-resolve theme tokens
-      else apply_theme_colors();  // in-place colour/gradient/font update (no teardown)
+      if (layout_engine_active()) {
+          // Coupled skins: activating theme slot N also flips the layout to page N
+          // (design + palette switch together). set_page rebuilds with the palette
+          // theme_to_globals already applied; else just re-resolve tokens in place.
+          if (layout_follows_theme && active_theme < (uint8_t)layout_engine_page_count()
+              && active_theme != (uint8_t)layout_engine_page())
+              layout_engine_set_page(active_theme);
+          else
+              layout_engine_theme_changed();
+      } else {
+          apply_theme_colors();  // in-place colour/gradient/font update (no teardown)
+      }
   }
   if (flag_bright_update) {
       flag_bright_update = false;

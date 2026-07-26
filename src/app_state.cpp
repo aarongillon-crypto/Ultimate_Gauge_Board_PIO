@@ -76,5 +76,6 @@ volatile bool snap_displayed = false;
 volatile uint32_t identify_end_ms = 0;
 
 bool layout_enabled = true;
+bool layout_follows_theme = false;
 volatile bool flag_layout_reload = false;
 volatile int32_t pending_layout_page = -1;

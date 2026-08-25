@@ -58,6 +58,23 @@
 
 #define GC_SIG_PARK  0x20   // byte0 b5 (0xC0 idle -> 0xE0 when park active)
 
+// -----------------------------------------------------------------------------
+// Second controller: slave status + master<->slave sync (added 2026-08-25)
+// -----------------------------------------------------------------------------
+// A second GlowCraft controller joined the bus. It emits its own status frame,
+// and the pair exchange four sync channels. We choose these IDs; the payloads
+// are GlowCraft-internal and carry nothing the gauge consumes today.
+//
+// The gauge takes park from the MASTER's 0x520 only — 0x521 is not decoded. If
+// the slave ever drives strips independently, decode it here rather than
+// widening GLOWCRAFT_SIGNAL_CAN.
+//
+// Audited against both Haltech protocol PDFs 2026-08-25: neither defines any ID
+// in 0x5xx, so this block is clash-free. See Haltech_CAN_Bus_Reference.md §1.
+#define GLOWCRAFT_SIGNAL_CAN_SLAVE    (GLOWCRAFT_CAN_BASE + 0x21)   // 0x521
+#define GLOWCRAFT_SYNC_CAN_FIRST      (GLOWCRAFT_CAN_BASE + 0x22)   // 0x522
+#define GLOWCRAFT_SYNC_CAN_LAST       (GLOWCRAFT_CAN_BASE + 0x25)   // 0x525
+
 enum GlowCraftState : uint8_t {
   GC_STATE_OFF       = 0,   // strip idle / dark
   GC_STATE_SOLID     = 1,   // solid colour
@@ -115,3 +132,10 @@ bool glowcraft_park_active(uint32_t now_ms);
 
 // Packed 0x00RRGGBB for the strip with brightness applied, or 0 if offline.
 uint32_t glowcraft_strip_color(int idx, uint32_t now_ms);
+
+// True for GlowCraft frames the gauge recognises but deliberately does not
+// decode (slave status 0x521, sync 0x522-0x525). The debug sniffer skips these:
+// its job is surfacing UNKNOWN IDs, and high-rate sync traffic would just bury
+// the rows that matter. Strips and 0x520 stay visible — §5 of the CAN reference
+// tells you to watch 0x520 when identifying a frame.
+bool glowcraft_frame_ignored(uint32_t id);

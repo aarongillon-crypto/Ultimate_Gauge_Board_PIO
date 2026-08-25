@@ -32,7 +32,7 @@ the **GlowCraft** LED controller. No physical PD16.
 | `0x6F0`–`0x701` | Haltech ECU broadcast | ✅ in registry (`0x700` is the R5 PDM mux — skipped) |
 | `0x320`–`0x341` | Nexus device → ECU (inputs: AVI/DPI/button state) | ❌ multiplexed, not decoded |
 | `0x6A8`–`0x6EF` | Nexus device ↔ ECU (PD16/IO16/TI4L control + status) | ❌ multiplexed, not decoded |
-| `0x500`–`0x52F` | **GlowCraft** (we assign these) | strips `0x500`+ on the LED page; `0x520` signals frame (park) |
+| `0x500`–`0x52F` | **GlowCraft** ×2 (we assign these) | strips `0x500`+ on the LED page; `0x520` signals frame (park). `0x521`–`0x525` known but not decoded — see §1a |
 | everything else | unknown / third-party | ❌ |
 
 > The gauge is **TX-capable** as of v2.6.2 (`canbus_send()`), but currently
@@ -42,6 +42,51 @@ the **GlowCraft** LED controller. No physical PD16.
 **Complete ECU-broadcast set (v2.0 PDF)** for cross-checking:
 `0x360–0x377 0x380 0x3E0–0x3EF 0x3F0–0x3F3 0x469 0x470–0x477 0x6F0–0x6F9 0x6FF
 0x700 0x701`. Anything not in that list is a Nexus device (see §3) or third-party.
+
+---
+
+## 1a. The GlowCraft `0x5xx` block — allocation & clash audit
+
+A **second GlowCraft controller** was added 2026-08-25. Current allocation:
+
+| ID(s) | Purpose | Gauge behaviour |
+|-------|---------|-----------------|
+| `0x500`–`0x507` | Strip status, one ID per strip (master) | ✅ decoded → LED page |
+| `0x520` | Master "Send CAN Status" signals frame | ✅ decoded → park bit (screen dim) |
+| `0x521` | **Slave** controller status frame | ❌ not decoded; sniffer-ignored |
+| `0x522`–`0x525` | **Master ↔ slave sync channels** | ❌ not decoded; sniffer-ignored |
+
+### Clash audit — 2026-08-25: CLEAR
+
+Text-extracted and enumerated every ID in all three PDFs. **Neither Haltech
+document defines a single ID anywhere in `0x5xx`.** Checked for IDs written in
+decimal and as bare hex triplets too — the only `5xx`-shaped tokens are `512`
+("Rest Position", a cruise-control *value*) and `500` (ms/µs rate figures).
+
+- **Broadcast PDF:** `0x360–0x364 0x368–0x377 0x380 0x3E0–0x3EF 0x3F0–0x3F3
+  0x3F5 0x469 0x470–0x477 0x6F0–0x6F4 0x6F6–0x6F9 0x6FF 0x700 0x701`
+- **Multiplexed PDF:** `0x320–0x32B 0x330–0x33B 0x340–0x344 0x680 0x6A8 0x6B0
+  0x6B8 0x6CA–0x6CD 0x6D0 0x6D8 0x6E0 0x6E8 0x6F7–0x6FE`
+- **Keypad PDF:** `0x18FF0280` (PGN `0xFF02`) — 29-bit extended, separate ID
+  space; the Haltech variant on this car sits at 11-bit `0x60B`–`0x60D` (§4).
+- **Live bus (§2):** nothing observed in `0x5xx` other than our own frames.
+
+Free window either side: **`0x478`–`0x60A`** is entirely unused (403 IDs), so
+the block has room to grow in both directions.
+
+### Arbitration priority — the one real consideration
+Lower ID = higher priority. `0x520`–`0x525` outrank every Nexus `0x6xx` frame
+(IO16 `0x6A8`, PDM `0x700`, keypad `0x60B`) but lose to all ECU broadcast
+(`0x360`–`0x477`). So heavy sync traffic can only ever delay **IO16/PDM status**,
+never engine data. At 1 Mbit this is academic — but if IO16 status ever goes
+laggy, check the GlowCraft sync rate first.
+
+### Two caveats for future changes
+- **Nexus base IDs are remappable** in NSP. If you ever CAN-ID-swap a device,
+  don't point it at `0x5xx`.
+- **`0x550` is free** (reserved for the abandoned iC-7 page-seek, §6b) but sits
+  inside the `0x500`–`0x52F` block this doc claims for GlowCraft. Widen the claim
+  or pick elsewhere if you need it.
 
 ---
 
@@ -184,6 +229,10 @@ order survives the Haltech firmware — verify every key.
    - IO16 output → trigger the function driving an HBO/HCO, watch `0x6A8`/`0x700`.
    - IO16 input → apply voltage / press a wired button, watch `0x330`+.
    - GlowCraft → toggle a show, watch `0x520` (and the `0x60x` triplet).
+     Note the sniffer **deliberately hides `0x521`–`0x525`** (slave status +
+     master↔slave sync, §1a) — known IDs, filtered so they don't bury unknowns.
+     Strips and `0x520` are still shown. To see them again, drop the
+     `glowcraft_frame_ignored()` guard in `src/haltech_decode.cpp`.
 3. **Cross-reference the device manual / NSP** — CAN-ID swapping means a device's
    base may be remapped from the defaults above.
 4. Record confirmed frames here; add genuinely useful ones to the registry.

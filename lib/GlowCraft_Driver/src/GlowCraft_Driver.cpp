@@ -53,6 +53,11 @@ bool glowcraft_decode(const twai_message_t* msg) {
   return true;
 }
 
+bool glowcraft_frame_ignored(uint32_t id) {
+  return id == GLOWCRAFT_SIGNAL_CAN_SLAVE ||
+         (id >= GLOWCRAFT_SYNC_CAN_FIRST && id <= GLOWCRAFT_SYNC_CAN_LAST);
+}
+
 bool glowcraft_strip_online(int idx, uint32_t now_ms) {
   if (idx < 0 || idx >= GC_STRIP_COUNT) return false;
   uint32_t seen = glowcraft_strips[idx].last_seen_ms;

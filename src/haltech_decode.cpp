@@ -186,8 +186,12 @@ void process_can_queue_task(void *arg) {
         } else {
           // GlowCraft strip-status frames (0x500+) — decoded in their own module.
           glowcraft_decode(&message);
-          // Also latch every non-Haltech frame for the debug sniffer view.
-          sniff_capture(&message);
+          // Also latch every non-Haltech frame for the debug sniffer view, minus
+          // the GlowCraft slave/sync frames (0x521-0x525): known IDs we choose not
+          // to decode, so they are pure noise in a view meant for unknowns.
+          // Deliberately NOT applied to the 500k path above — discovery there
+          // must capture everything raw.
+          if (!glowcraft_frame_ignored(message.identifier)) sniff_capture(&message);
         }
       }
     }

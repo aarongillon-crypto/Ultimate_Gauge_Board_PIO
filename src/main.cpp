@@ -62,17 +62,32 @@ static int effective_brightness() {
   return compute_park_dim() ? dim_brightness : current_brightness;
 }
 
+// Covers every esp_reset_reason_t in ESP-IDF 5.5. The previous version handled
+// only 8 of the 16, so a USB/JTAG reset (every reflash and IDE reset) printed
+// "UNKNOWN" — and so did POWER_GLITCH and CPU_LOCKUP, the two most diagnostic
+// ones here: power glitch is the same supply-instability class as the backlight-
+// inrush brownouts chased since v1.1.2, and CPU lockup (double exception) is a
+// distinct failure from PANIC. `default` is kept so a future IDF adding reasons
+// still builds.
 static const char* reset_reason_str(esp_reset_reason_t r) {
   switch (r) {
-    case ESP_RST_POWERON:   return "POWER_ON";
-    case ESP_RST_SW:        return "SOFTWARE (ESP.restart)";
-    case ESP_RST_PANIC:     return "PANIC/EXCEPTION";
-    case ESP_RST_INT_WDT:   return "INTERRUPT_WATCHDOG";
-    case ESP_RST_TASK_WDT:  return "TASK_WATCHDOG";
-    case ESP_RST_WDT:       return "OTHER_WATCHDOG";
-    case ESP_RST_BROWNOUT:  return "BROWNOUT";
-    case ESP_RST_SDIO:      return "SDIO";
-    default:                return "UNKNOWN";
+    case ESP_RST_POWERON:    return "POWER_ON";
+    case ESP_RST_EXT:        return "EXTERNAL_PIN";
+    case ESP_RST_SW:         return "SOFTWARE (ESP.restart)";
+    case ESP_RST_PANIC:      return "PANIC/EXCEPTION";
+    case ESP_RST_INT_WDT:    return "INTERRUPT_WATCHDOG";
+    case ESP_RST_TASK_WDT:   return "TASK_WATCHDOG";
+    case ESP_RST_WDT:        return "OTHER_WATCHDOG";
+    case ESP_RST_DEEPSLEEP:  return "DEEP_SLEEP_WAKE";
+    case ESP_RST_BROWNOUT:   return "BROWNOUT";
+    case ESP_RST_SDIO:       return "SDIO";
+    case ESP_RST_USB:        return "USB_PERIPHERAL (reflash / IDE reset)";
+    case ESP_RST_JTAG:       return "JTAG";
+    case ESP_RST_EFUSE:      return "EFUSE_ERROR";
+    case ESP_RST_PWR_GLITCH: return "POWER_GLITCH (supply instability)";
+    case ESP_RST_CPU_LOCKUP: return "CPU_LOCKUP (double exception)";
+    case ESP_RST_UNKNOWN:    return "UNKNOWN";
+    default:                 return "UNRECOGNISED";
   }
 }
 
@@ -92,9 +107,12 @@ void setup() {
 
   // After a brownout the ST7701's internal LDOs may still be settling.
   // Hold RESET low longer and wait before initialising to guarantee a clean panel state.
-  bool was_brownout = (rr == ESP_RST_BROWNOUT);
+  // PWR_GLITCH gets the same treatment: it is the same supply-instability event as
+  // far as the panel LDOs are concerned, and it was previously indistinguishable
+  // from UNKNOWN so it silently skipped this recovery path.
+  bool was_brownout = (rr == ESP_RST_BROWNOUT || rr == ESP_RST_PWR_GLITCH);
   if (was_brownout) {
-    Serial.println("[DISP] Brownout detected — extending display reset hold");
+    Serial.printf("[DISP] %s detected — extending display reset hold\n", reset_reason_str(rr));
     i2c_init();
     tca9554pwr_init(0x00);
     set_exio(EXIO_PIN1, Low);   // Hold RESET low for 300 ms instead of 50 ms

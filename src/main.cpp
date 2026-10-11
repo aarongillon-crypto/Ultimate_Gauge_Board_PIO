@@ -314,13 +314,13 @@ void loop() {
   }
   if (flag_new_peer) {
       flag_new_peer = false;
-      if (link_icon) lv_obj_clear_flag(link_icon, LV_OBJ_FLAG_HIDDEN);  // built-in face only
+      if (link_icon) lv_obj_set_hidden(link_icon, false);  // built-in face only
   }
   if (flag_stats_update) {
       flag_stats_update = false;
       if (perf_label) {   // stats overlay belongs to the built-in face
-          if(show_perf_stats) lv_obj_clear_flag(perf_label, LV_OBJ_FLAG_HIDDEN);
-          else lv_obj_add_flag(perf_label, LV_OBJ_FLAG_HIDDEN);
+          if(show_perf_stats) lv_obj_set_hidden(perf_label, false);
+          else lv_obj_set_hidden(perf_label, true);
       }
   }
   if (flag_page_update) {

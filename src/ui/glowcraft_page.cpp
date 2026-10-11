@@ -29,7 +29,7 @@ void build_glowcraft_page() {
   glowcraft_scr = lv_obj_create(NULL);
   lv_obj_set_style_bg_color(glowcraft_scr, lv_color_black(), 0);
   lv_obj_set_style_pad_all(glowcraft_scr, 0, 0);
-  lv_obj_clear_flag(glowcraft_scr, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_scrollable(glowcraft_scr, false);
 
   // Car body outline behind the strips (drawn first = lowest z-order).
   lv_obj_t *body = lv_obj_create(glowcraft_scr);
@@ -40,7 +40,7 @@ void build_glowcraft_page() {
   lv_obj_set_style_bg_opa(body, LV_OPA_TRANSP, 0);
   lv_obj_set_style_border_width(body, 2, 0);
   lv_obj_set_style_border_color(body, lv_color_hex(0x404040), 0);
-  lv_obj_clear_flag(body, LV_OBJ_FLAG_SCROLLABLE);
+  lv_obj_set_scrollable(body, false);
 
   lv_obj_t *title = lv_label_create(glowcraft_scr);
   lv_obj_set_style_text_font(title, &lv_font_montserrat_20, 0);
@@ -56,7 +56,7 @@ void build_glowcraft_page() {
     lv_obj_set_pos(w, L->x, L->y);
     lv_obj_set_size(w, L->w, L->h);
     lv_obj_set_style_radius(w, L->radius, 0);
-    lv_obj_clear_flag(w, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_set_scrollable(w, false);
     if (glowcraft_strips[i].installed) {
       lv_obj_set_style_bg_opa(w, LV_OPA_COVER, 0);
       lv_obj_set_style_bg_color(w, lv_color_hex(GC_DIM_COLOR), 0);

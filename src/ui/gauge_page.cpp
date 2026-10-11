@@ -109,7 +109,7 @@ void load_current_style() {
     lv_label_set_text(link_icon, LV_SYMBOL_WIFI);
     lv_obj_set_style_text_color(link_icon, lv_color_hex(color_link_icon), 0);
     lv_obj_align(link_icon, LV_ALIGN_BOTTOM_MID, 0, -100);
-    if(fleet_count == 0) lv_obj_add_flag(link_icon, LV_OBJ_FLAG_HIDDEN);
+    if(fleet_count == 0) lv_obj_set_hidden(link_icon, true);
 
     // PERF OVERLAY (MOVED TO CENTER-TOP)
     perf_label = lv_label_create(gauge_scr);
@@ -117,7 +117,7 @@ void load_current_style() {
     lv_obj_set_style_text_color(perf_label, lv_color_white(), 0);
     lv_obj_set_style_bg_color(perf_label, lv_color_black(), 0);
     lv_obj_set_style_bg_opa(perf_label, 150, 0);
-    if(!show_perf_stats) lv_obj_add_flag(perf_label, LV_OBJ_FLAG_HIDDEN);
+    if(!show_perf_stats) lv_obj_set_hidden(perf_label, true);
 
     // === STATIC RING INDICATOR (outer border, color-changing) ===
     bar = lv_obj_create(gauge_scr);
@@ -137,7 +137,7 @@ void load_current_style() {
     lv_obj_set_style_bg_color(peak_dot, lv_color_hex(color_peak), 0);
     lv_obj_set_style_border_width(peak_dot, 0, 0);
     lv_obj_set_pos(peak_dot, 0, 0);
-    if(!peak_hold_enabled) lv_obj_add_flag(peak_dot, LV_OBJ_FLAG_HIDDEN); // Initial State
+    if(!peak_hold_enabled) lv_obj_set_hidden(peak_dot, true); // Initial State
 
     // NEEDLE TIP - thin triangle that orbits around center
     needle_tip = lv_line_create(gauge_scr);
@@ -152,7 +152,7 @@ void load_current_style() {
     lv_obj_set_style_text_align(peak_high_label, LV_TEXT_ALIGN_RIGHT, 0);
     lv_label_set_text(peak_high_label, LV_SYMBOL_UP " --");
     lv_obj_align(peak_high_label, LV_ALIGN_CENTER, -60, -120);
-    if (!peak_hold_enabled) lv_obj_add_flag(peak_high_label, LV_OBJ_FLAG_HIDDEN);
+    if (!peak_hold_enabled) lv_obj_set_hidden(peak_high_label, true);
 
     peak_low_label = lv_label_create(gauge_scr);
     lv_obj_set_style_text_font(peak_low_label, &lv_font_montserrat_28, 0);
@@ -160,7 +160,7 @@ void load_current_style() {
     lv_obj_set_style_text_align(peak_low_label, LV_TEXT_ALIGN_LEFT, 0);
     lv_label_set_text(peak_low_label, LV_SYMBOL_DOWN " --");
     lv_obj_align(peak_low_label, LV_ALIGN_CENTER, 60, -120);
-    if (!peak_hold_enabled) lv_obj_add_flag(peak_low_label, LV_OBJ_FLAG_HIDDEN);
+    if (!peak_hold_enabled) lv_obj_set_hidden(peak_low_label, true);
 
     common_label_setup();
     lv_obj_align(mode_label, LV_ALIGN_BOTTOM_MID, 0, -60);
@@ -241,8 +241,8 @@ static void update_ui(float val, float min, float max, uint32_t color_hex) {
 
     if (peak_hold_enabled) {
         if (prev_label_mode != 1) {
-            lv_obj_clear_flag(peak_high_label, LV_OBJ_FLAG_HIDDEN);
-            lv_obj_clear_flag(peak_low_label, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_set_hidden(peak_high_label, false);
+            lv_obj_set_hidden(peak_low_label, false);
             prev_label_mode = 1;
             prev_high[0] = '\0'; prev_low[0] = '\0'; // force text refresh
         }
@@ -265,8 +265,8 @@ static void update_ui(float val, float min, float max, uint32_t color_hex) {
         if (prev_label_mode != 2) {
             lv_obj_set_style_text_align(peak_high_label, LV_TEXT_ALIGN_CENTER, 0);
             lv_obj_align(peak_high_label, LV_ALIGN_CENTER, 0, -120);
-            lv_obj_clear_flag(peak_high_label, LV_OBJ_FLAG_HIDDEN);
-            lv_obj_add_flag(peak_low_label, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_set_hidden(peak_high_label, false);
+            lv_obj_set_hidden(peak_low_label, true);
             prev_label_mode = 2;
             prev_high[0] = '\0';
         }
@@ -276,8 +276,8 @@ static void update_ui(float val, float min, float max, uint32_t color_hex) {
         }
     } else {
         if (prev_label_mode != 0) {
-            lv_obj_add_flag(peak_high_label, LV_OBJ_FLAG_HIDDEN);
-            lv_obj_add_flag(peak_low_label, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_set_hidden(peak_high_label, true);
+            lv_obj_set_hidden(peak_low_label, true);
             prev_label_mode = 0;
         }
     }

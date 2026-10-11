@@ -26,8 +26,9 @@
    COLOR SETTINGS
  *====================*/
 
-/** Color depth: 1 (I1), 8 (L8), 16 (RGB565), 24 (RGB888), 32 (XRGB8888) */
-#define LV_COLOR_DEPTH 16
+/** Default colour format. Replaces LV_COLOR_DEPTH (deprecated in LVGL 9.6).
+ *  RGB565 = 16bpp, matching the ST7701 RGB panel's 16-bit data bus. */
+#define LV_COLOR_FORMAT_DEFAULT LV_COLOR_FORMAT_RGB565
 
 /*=========================
    STDLIB WRAPPER SETTINGS
@@ -71,8 +72,6 @@
     /** Size of memory available for `lv_malloc()` in bytes (>= 2kB) */
     #define LV_MEM_SIZE (96 * 1024U)          /**< [bytes] - 96K: complex gradients (radial/conical) allocate a gradient map from this pool while the big DSEG14 glyph caches fragment it; smaller pools exhaust -> lv_malloc NULL -> renderer crash */
 
-    /** Size of the memory expand for `lv_malloc()` in bytes */
-    #define LV_MEM_POOL_EXPAND_SIZE 0
 
     /** Set an address for the memory pool instead of allocating it as a normal array. Can be in external SRAM too. */
     #define LV_MEM_ADR 0     /**< 0: unused*/
@@ -420,8 +419,8 @@
 #define LV_USE_ASSERT_MEM_INTEGRITY 0   /**< Check the integrity of `lv_mem` after critical operations. (Slow) */
 #define LV_USE_ASSERT_OBJ           0   /**< Check the object's type and existence (e.g. not deleted). (Slow) */
 
-/** Add a custom handler when assert happens e.g. to restart MCU. */
-#define LV_ASSERT_HANDLER_INCLUDE <stdint.h>
+/** Add a custom handler when assert happens e.g. to restart MCU.
+ *  (LV_ASSERT_HANDLER_INCLUDE was dropped in 9.6 — a bare while(1) needs no header.) */
 #define LV_ASSERT_HANDLER while(1);     /**< Halt by default */
 
 /*-------------

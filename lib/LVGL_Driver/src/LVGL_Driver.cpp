@@ -16,10 +16,21 @@
 // resync window in main.cpp / build_active_scene).
 //
 // 1/20th screen per SRAM chunk — keeps DMA-capable SRAM available for WiFi.
-#define BUF_SIZE (LCD_WIDTH * LCD_HEIGHT / 20)
+#define BUF_PX (LCD_WIDTH * LCD_HEIGHT / 20)
 
-static lv_color_t *buf1 = NULL;
-static lv_color_t *buf2 = NULL;
+// Bytes per pixel of the render buffer. Deliberately NOT sizeof(lv_color_t):
+// that is a 3-byte {b,g,r} struct in LVGL 9 whatever the display format is, so
+// sizing with it over-allocated each buffer by 50% (34,560 B instead of 23,040)
+// and quietly spent ~23 KB more internal DMA SRAM than the 1/20th-screen note
+// above claims — on this board's scarcest resource, and against the very reason
+// the chunk is kept small. lv_display_create() sets the display to
+// LV_COLOR_FORMAT_DEFAULT (RGB565 here = 2 B/px), so derive it from that and the
+// sizing follows automatically if the colour format is ever changed.
+#define BUF_BPP   LV_COLOR_FORMAT_GET_SIZE(LV_COLOR_FORMAT_DEFAULT)
+#define BUF_BYTES (BUF_PX * BUF_BPP)
+
+static uint8_t *buf1 = NULL;
+static uint8_t *buf2 = NULL;
 static SemaphoreHandle_t vsync_sem = NULL;
 static uint32_t flush_start_ms = 0;
 uint32_t lvgl_render_ms = 0;
@@ -65,20 +76,21 @@ void lvgl_init(void) {
     esp_lcd_rgb_panel_event_callbacks_t cbs = { .on_vsync = on_vsync };
     esp_lcd_rgb_panel_register_event_callbacks(panel_handle, &cbs, NULL);
 
-    buf1 = (lv_color_t *)heap_caps_aligned_alloc(32, BUF_SIZE * sizeof(lv_color_t),
-                                                  MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
-    buf2 = (lv_color_t *)heap_caps_aligned_alloc(32, BUF_SIZE * sizeof(lv_color_t),
-                                                  MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+    buf1 = (uint8_t *)heap_caps_aligned_alloc(32, BUF_BYTES,
+                                              MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
+    buf2 = (uint8_t *)heap_caps_aligned_alloc(32, BUF_BYTES,
+                                              MALLOC_CAP_DMA | MALLOC_CAP_INTERNAL);
 
     if (!buf1 || !buf2) {
         printf("LVGL_Driver: Failed to allocate SRAM draw buffers!\n");
         return;
     }
+    printf("[LVGL] 2 partial draw buffers: %u px, %u B each (%u B/px) internal DMA SRAM\n",
+           (unsigned)BUF_PX, (unsigned)BUF_BYTES, (unsigned)BUF_BPP);
 
     lv_display_t *disp = lv_display_create(LCD_WIDTH, LCD_HEIGHT);
     lv_display_set_flush_cb(disp, lvgl_flush_callback);
-    lv_display_set_buffers(disp, buf1, buf2,
-                           BUF_SIZE * sizeof(lv_color_t),
+    lv_display_set_buffers(disp, buf1, buf2, BUF_BYTES,
                            LV_DISPLAY_RENDER_MODE_PARTIAL);
     lv_display_set_resolution(disp, LCD_WIDTH, LCD_HEIGHT);
     lv_display_set_physical_resolution(disp, LCD_WIDTH, LCD_HEIGHT);

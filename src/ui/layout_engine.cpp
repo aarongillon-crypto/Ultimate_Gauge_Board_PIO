@@ -544,7 +544,7 @@ static void build_element(LeElement& el, int idx) {
       } else {
         place_label(el, initial);
       }
-      if (el.type == LE_WARNING && el.off_hidden) lv_obj_add_flag(el.obj, LV_OBJ_FLAG_HIDDEN);
+      if (el.type == LE_WARNING && el.off_hidden) lv_obj_set_hidden(el.obj, true);
       el.prev_a = -1;   // warning: last on/off state
       break;
     }
@@ -577,7 +577,7 @@ static void build_element(LeElement& el, int idx) {
       lv_obj_set_style_border_color(el.obj, lv_color_hex(col_val(el.low)), 0);
       lv_obj_set_style_border_side(el.obj, LV_BORDER_SIDE_FULL, 0);
       lv_obj_set_style_radius(el.obj, el.r, 0);
-      lv_obj_clear_flag(el.obj, LV_OBJ_FLAG_SCROLLABLE);
+      lv_obj_set_scrollable(el.obj, false);
       el.prev_col = 0;
       break;
     }
@@ -589,13 +589,13 @@ static void build_element(LeElement& el, int idx) {
       lv_obj_set_style_radius(el.obj, el.radius, 0);
       lv_obj_set_style_bg_opa(el.obj, LV_OPA_COVER, 0);
       lv_obj_set_style_bg_color(el.obj, lv_color_hex(col_val(el.track)), 0);
-      lv_obj_clear_flag(el.obj, LV_OBJ_FLAG_SCROLLABLE);
+      lv_obj_set_scrollable(el.obj, false);
       el.obj2 = lv_obj_create(gauge_scr);      // fill
       lv_obj_remove_style_all(el.obj2);
       lv_obj_set_style_radius(el.obj2, el.radius, 0);
       lv_obj_set_style_bg_opa(el.obj2, LV_OPA_COVER, 0);
       lv_obj_set_style_bg_color(el.obj2, lv_color_hex(col_val(el.low)), 0);
-      lv_obj_clear_flag(el.obj2, LV_OBJ_FLAG_SCROLLABLE);
+      lv_obj_set_scrollable(el.obj2, false);
       el.prev_a = -1; el.prev_col = 0;
       break;
     }
@@ -628,7 +628,7 @@ static void build_element(LeElement& el, int idx) {
         lv_obj_set_style_border_width(el.obj, el.stroke_w, 0);
         lv_obj_set_style_border_color(el.obj, lv_color_hex(col_val(el.stroke)), 0);
       }
-      lv_obj_clear_flag(el.obj, LV_OBJ_FLAG_SCROLLABLE);
+      lv_obj_set_scrollable(el.obj, false);
       break;
     }
     case LE_SHIFT: {
@@ -640,7 +640,7 @@ static void build_element(LeElement& el, int idx) {
       lv_obj_set_pos(el.obj, el.x, el.y);
       int totalw = el.segs * el.w + (el.segs - 1) * el.gap;
       lv_obj_set_size(el.obj, totalw, el.h);
-      lv_obj_clear_flag(el.obj, LV_OBJ_FLAG_SCROLLABLE);
+      lv_obj_set_scrollable(el.obj, false);
       for (int s = 0; s < el.segs; s++) {
         float thr = el.min + (s + 1) * (el.max - el.min) / el.segs;
         lv_obj_t* seg = lv_obj_create(el.obj);
@@ -650,7 +650,7 @@ static void build_element(LeElement& el, int idx) {
         lv_obj_set_style_radius(seg, el.radius, 0);
         lv_obj_set_style_bg_color(seg, lv_color_hex(zone_col(el, thr)), 0);
         lv_obj_set_style_bg_opa(seg, LV_OPA_TRANSP, 0);
-        lv_obj_clear_flag(seg, LV_OBJ_FLAG_SCROLLABLE);
+        lv_obj_set_scrollable(seg, false);
       }
       el.prev_a = -1; el.prev_b = -1;
       break;
@@ -663,7 +663,7 @@ static void build_element(LeElement& el, int idx) {
       lv_obj_set_pos(el.obj, el.cx - el.r, el.cy - el.r);
       lv_obj_set_style_bg_opa(el.obj, LV_OPA_TRANSP, 0);
       lv_obj_set_style_border_width(el.obj, 0, 0);
-      lv_obj_clear_flag(el.obj, LV_OBJ_FLAG_SCROLLABLE);
+      lv_obj_set_scrollable(el.obj, false);
       lv_scale_set_rotation(el.obj, el.start_deg);
       lv_scale_set_angle_range(el.obj, el.sweep_deg);
       lv_scale_set_range(el.obj, (int32_t)el.min, (int32_t)el.max);
@@ -719,7 +719,7 @@ static void build_element(LeElement& el, int idx) {
     case LE_ALERT: {
       el.obj = lv_obj_create(gauge_scr);
       lv_obj_remove_style_all(el.obj);
-      lv_obj_clear_flag(el.obj, LV_OBJ_FLAG_SCROLLABLE);
+      lv_obj_set_scrollable(el.obj, false);
       if (el.alert_full) {                 // whole-screen flash (heavy — measured)
         lv_obj_set_pos(el.obj, 0, 0);
         lv_obj_set_size(el.obj, 480, 480);
@@ -783,7 +783,7 @@ static void build_active_scene() {
   lv_obj_set_style_bg_color(perf_label, lv_color_black(), 0);
   lv_obj_set_style_bg_opa(perf_label, 150, 0);
   lv_label_set_text(perf_label, "FPS:--");
-  if (!show_perf_stats) lv_obj_add_flag(perf_label, LV_OBJ_FLAG_HIDDEN);
+  if (!show_perf_stats) lv_obj_set_hidden(perf_label, true);
 
   // Post-rebuild recovery (see loop()): restore full pclk after the burst, and
   // continuously re-align the DMA for a window so any slip is corrected in a frame.
@@ -901,13 +901,13 @@ void layout_engine_update() {
       if (shown != el.prev_shown) {
         el.prev_shown = shown;
         if (shown) {
-          lv_obj_clear_flag(el.obj, LV_OBJ_FLAG_HIDDEN);
-          if (el.obj2) lv_obj_clear_flag(el.obj2, LV_OBJ_FLAG_HIDDEN);
+          lv_obj_set_hidden(el.obj, false);
+          if (el.obj2) lv_obj_set_hidden(el.obj2, false);
           // invalidate per-type caches so the element repaints on re-show
           el.prev_a = el.prev_b = INT32_MIN; el.prev_col = 0; el.prev_txt[0] = '\x01'; el.prev_txt[1] = '\0';
         } else {
-          lv_obj_add_flag(el.obj, LV_OBJ_FLAG_HIDDEN);
-          if (el.obj2) lv_obj_add_flag(el.obj2, LV_OBJ_FLAG_HIDDEN);
+          lv_obj_set_hidden(el.obj, true);
+          if (el.obj2) lv_obj_set_hidden(el.obj2, true);
         }
       }
       if (!shown) continue;   // hidden — skip the per-type update
@@ -1022,8 +1022,8 @@ void layout_engine_update() {
       case LE_WARNING: {
         int32_t on = haltech_value(el.chan_idx) != 0.0f ? 1 : 0;
         if (on != el.prev_a) {
-          if (on) lv_obj_clear_flag(el.obj, LV_OBJ_FLAG_HIDDEN);
-          else if (el.off_hidden) lv_obj_add_flag(el.obj, LV_OBJ_FLAG_HIDDEN);
+          if (on) lv_obj_set_hidden(el.obj, false);
+          else if (el.off_hidden) lv_obj_set_hidden(el.obj, true);
           el.prev_a = on;
         }
         break;

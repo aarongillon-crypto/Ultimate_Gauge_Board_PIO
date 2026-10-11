@@ -28,6 +28,10 @@ function act(name, q){ return post('/api/action/' + name + (q || '')).then(funct
 function renderState(s){
   $('devname').textContent = s.name;
   document.title = s.name;
+  var ap = $('apstatus');
+  if (ap) ap.innerHTML = s.apSecured
+    ? '<small style="color:#8bc34a">AP is secured (WPA2).</small>'
+    : '<small style="color:#ff9800">AP is OPEN — anyone in range can reach this UI and flash firmware.</small>';
   $('chippeers').textContent = s.peers;
   $('chipmode').textContent = s.modeLabel || ('M' + (s.mode + 1));
   $('chippage').textContent = s.page === 0 ? 'GAUGE' : 'GLOWCRAFT';
@@ -169,6 +173,23 @@ function rename(){
   post('/api/action/name?v=' + encodeURIComponent(n))
     .then(function(){ toast('Renamed — device restarting'); })
     .catch(function(){ toast('Rename failed', 1); });
+}
+
+// ---------- AP security ----------
+// The passphrase is never read back from the device (the API only reports
+// apSecured), so the field always starts empty and we show status separately.
+function setApPass(){
+  var p = $('appass').value;
+  if (p.length < 8 || p.length > 63) { toast('Password must be 8-63 characters', 1); return; }
+  post('/api/action/appass?v=' + encodeURIComponent(p))
+    .then(function(){ $('appass').value = ''; toast('AP secured — device restarting'); })
+    .catch(function(){ toast('Failed to set password', 1); });
+}
+function clearApPass(){
+  if (!confirm('Make the gauge AP OPEN again?'+String.fromCharCode(10)+String.fromCharCode(10)+'Anyone in range will be able to reach the web UI and flash firmware.')) return;
+  post('/api/action/appass?v=')
+    .then(function(){ $('appass').value = ''; toast('AP is now open — device restarting'); })
+    .catch(function(){ toast('Failed to clear password', 1); });
 }
 
 // ---------- channels ----------

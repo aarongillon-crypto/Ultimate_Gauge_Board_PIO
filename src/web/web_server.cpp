@@ -125,11 +125,24 @@ static const char OTA_FALLBACK_HTML[] PROGMEM =
     "<button type='submit' style='padding:10px 24px'>Flash Firmware</button>"
     "</form></body></html>";
 
+// Gate for the main OTA route. Active only while an AP password is set, matching
+// the "open until you configure one" model. /otafallback is deliberately NOT
+// gated — it is the unbrick path and stays reachable to anyone already on the AP.
+// That means WPA2 on the AP, not this check, is what keeps an outsider out.
+#define OTA_AUTH_USER "admin"
+static bool ota_auth_ok() {
+  if (ap_password.length() < AP_PASS_MIN) return true;   // open device, nothing to check
+  if (server.authenticate(OTA_AUTH_USER, ap_password.c_str())) return true;
+  server.requestAuthentication(DIGEST_AUTH, "Gauge OTA", "Authentication required");
+  return false;
+}
+
 static void handleOTAFallback() {
     server.send_P(200, "text/html", OTA_FALLBACK_HTML);
 }
 
 static void handleOTAPage() {
+    if (!ota_auth_ok()) return;
     String html = "<html><head><meta name='viewport' content='width=device-width,initial-scale=1'>";
     html += "<style>body{font-family:sans-serif;text-align:center;background:#222;color:#fff;padding:20px;}";
     html += "input,button{font-size:16px;padding:10px;margin:10px;border-radius:5px;border:none;}";
@@ -145,6 +158,11 @@ static void handleOTAPage() {
 
 static void handleOTAUpload() {
     HTTPUpload& upload = server.upload();
+    // Upload handler runs per-chunk and cannot send a 401 mid-stream, so refuse
+    // to write anything unless the request is authorised. handleOTADone() sends
+    // the actual challenge once the body has been consumed.
+    if (ap_password.length() >= AP_PASS_MIN &&
+        !server.authenticate(OTA_AUTH_USER, ap_password.c_str())) return;
     if (upload.status == UPLOAD_FILE_START) {
         Serial.printf("[OTA] Start: %s\n", upload.filename.c_str());
         if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
@@ -164,6 +182,7 @@ static void handleOTAUpload() {
 }
 
 static void handleOTADone() {
+    if (!ota_auth_ok()) { Update.abort(); return; }
     bool ok = !Update.hasError();
     String html = "<html><body style='background:#222;color:#fff;text-align:center;font-family:sans-serif;padding:20px'>";
     if (ok) {
@@ -187,9 +206,23 @@ void setup_wifi() {
 
   char ssid[32];
   snprintf(ssid, sizeof(ssid), "Haltech-%s", device_name.c_str());
-  if (!WiFi.softAP(ssid, NULL, WIFI_CHANNEL)) {
+  // WPA2 only when a usable passphrase is stored. A too-short value would make
+  // softAP() fail outright and take the web UI + OTA recovery path with it, so
+  // fall back to an open AP and say so loudly rather than risk an unreachable gauge.
+  const char* pass = NULL;
+  if (ap_password.length() >= AP_PASS_MIN && ap_password.length() <= AP_PASS_MAX) {
+    pass = ap_password.c_str();
+  } else if (ap_password.length() > 0) {
+    Serial.printf("[WIFI] Stored AP password is %u chars (need %d-%d) — starting OPEN\n",
+                  ap_password.length(), AP_PASS_MIN, AP_PASS_MAX);
+  }
+  if (!WiFi.softAP(ssid, pass, WIFI_CHANNEL)) {
     Serial.println("[WIFI] softAP FAILED (out of internal heap?) — web/OTA unreachable");
   }
+  // Printed every boot on purpose: USB serial is the recovery channel if the
+  // passphrase is forgotten, and the alternative is a gauge nobody can reach.
+  if (pass) Serial.printf("[WIFI] AP %s secured (WPA2), password: %s\n", ssid, pass);
+  else      Serial.printf("[WIFI] AP %s is OPEN — set a password in the web UI\n", ssid);
 
   // Reduce WiFi power to minimize RF interference with display PSRAM bus
   esp_wifi_set_max_tx_power(34); // Reduce to ~8.5dBm to minimise PSRAM bus contention during TX bursts

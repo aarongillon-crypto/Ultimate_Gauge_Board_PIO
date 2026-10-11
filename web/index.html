@@ -185,6 +185,19 @@
   <small>WiFi AP name (Haltech-[name]).</small>
 </div>
 
+<div class="card">
+  <h3>WiFi AP Security</h3>
+  <div id="apstatus"><small>&nbsp;</small></div>
+  <input type="password" id="appass" maxlength="63" placeholder="8-63 characters">
+  <button class="danger" onclick="setApPass()">Set password (restarts device)</button>
+  <button onclick="clearApPass()">Make AP open</button>
+  <small>Secures the gauge AP with WPA2, so only devices with this password can
+  reach the web UI or flash firmware. Also required (user <b>admin</b>) for the
+  <b>/ota</b> page. The recovery page <b>/otafallback</b> stays open to anyone on
+  the AP. The password is printed on the USB serial log at every boot, so you can
+  recover it if forgotten.</small>
+</div>
+
 <div id="perf" style="font:12px/1.5 monospace;text-align:center;opacity:.75;margin-top:8px"></div>
 <footer id="footer"></footer>
 <div class="toast" id="toast"></div>

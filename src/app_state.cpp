@@ -23,6 +23,7 @@ bool debug_mode_enabled = false;
 GaugeMode current_mode = MODE_BOOST;
 DisplayPage current_page = PAGE_GAUGE;
 String device_name = "Gauge";
+String ap_password = "";   // empty = open AP
 int current_brightness = 40;
 int dim_brightness = 20;
 bool dim_can_enabled = false;

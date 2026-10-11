@@ -9,10 +9,10 @@
 // Bump FIRMWARE_VERSION on each release. FIRMWARE_BUILD is stamped automatically
 // by the compiler every build, so it always changes even if the version is not
 // bumped -- use it to confirm an OTA upload actually took effect.
-#define FIRMWARE_VERSION "2.10.1"
+#define FIRMWARE_VERSION "2.11.0"
 #define FIRMWARE_VER_MAJOR 2
-#define FIRMWARE_VER_MINOR 10
-#define FIRMWARE_VER_PATCH 1
+#define FIRMWARE_VER_MINOR 11
+#define FIRMWARE_VER_PATCH 0
 #define FIRMWARE_BUILD   __DATE__ " " __TIME__
 
 // --- MODES / PAGES ---
@@ -70,6 +70,12 @@ extern bool debug_mode_enabled;
 extern GaugeMode current_mode;
 extern DisplayPage current_page;
 extern String device_name;              // used for AP SSID
+// WPA2 passphrase for the softAP. EMPTY = open AP (the shipped default, so a
+// fresh board is never locked out). Set it from the web UI; applied on reboot.
+// Never serialise this over the API — /api/state exposes only apSecured.
+extern String ap_password;
+#define AP_PASS_MIN 8    // WPA2-PSK minimum
+#define AP_PASS_MAX 63   // WPA2-PSK maximum
 extern int current_brightness;          // "undimmed" backlight level (10..100)
 extern int dim_brightness;              // NVS "dimbr" — backlight level when CAN-dimmed
 extern bool dim_can_enabled;            // NVS "dimen" — enable Park-Light CAN dimming

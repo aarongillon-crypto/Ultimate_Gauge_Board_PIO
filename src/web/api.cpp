@@ -27,6 +27,7 @@ static uint32_t parseHex(const char* s) {
 static void apiState() {
   JsonDocument doc;
   doc["name"] = device_name;
+  doc["apSecured"] = (ap_password.length() >= AP_PASS_MIN);   // never send the passphrase
   doc["fw"] = FIRMWARE_VERSION;
   doc["build"] = FIRMWARE_BUILD;
   doc["mode"] = (int)current_mode;
@@ -566,6 +567,24 @@ static void apiAction() {
       reboot_at_ms = millis() + 400;  // restart (from loop) to apply new AP SSID
     } else {
       srv->send(400, "text/plain", "Name must be 1-20 characters");
+    }
+  } else if (name == "appass") {
+    // Empty clears it (AP reverts to open). Otherwise enforce the WPA2-PSK length
+    // bounds here so we can never persist a value that would make softAP() fail
+    // and leave the gauge with no web UI and no OTA.
+    String pw = v;
+    if (pw.length() == 0) {
+      ap_password = "";
+      cfg_put_string("appass", ap_password);
+      srv->send(200, "text/plain", "AP password cleared — restarting (AP will be OPEN)");
+      reboot_at_ms = millis() + 400;
+    } else if (pw.length() < AP_PASS_MIN || pw.length() > AP_PASS_MAX) {
+      srv->send(400, "text/plain", String("Password must be ") + AP_PASS_MIN + "-" + AP_PASS_MAX + " characters");
+    } else {
+      ap_password = pw;
+      cfg_put_string("appass", ap_password);
+      srv->send(200, "text/plain", "AP secured — restarting");
+      reboot_at_ms = millis() + 400;   // AP has to restart to apply the passphrase
     }
   } else if (name == "canbaud") {
     uint32_t b = (uint32_t)strtoul(v.c_str(), nullptr, 10);

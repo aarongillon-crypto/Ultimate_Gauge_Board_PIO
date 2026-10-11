@@ -177,6 +177,7 @@ bool cfg_load_all(const char* defaultName) {
   debug_mode_enabled = preferences.getBool("dbg", false);
   current_font = (uint8_t)preferences.getUInt("font", 0);
   device_name = preferences.getString("devname", defaultName);
+  ap_password = preferences.getString("appass", "");   // empty = open AP
   secondary_chan = preferences.getUShort("sm2", 0);   // chan_key (old "sm" index key retired)
   can_bitrate = preferences.getUInt("canbaud", 1000000);   // Haltech 1M default
   layout_follows_theme = preferences.getBool("lyfth", false);

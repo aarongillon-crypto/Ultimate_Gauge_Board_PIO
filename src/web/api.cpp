@@ -14,6 +14,9 @@
 
 static WebServer* srv = nullptr;
 
+#define STR_(x) #x
+#define STR(x)  STR_(x)   // MODE_SLOTS in a string literal
+
 static String hexStr(uint32_t c) {
   char buf[8]; snprintf(buf, sizeof(buf), "#%06X", c); return String(buf);
 }
@@ -70,9 +73,11 @@ static void apiState() {
     doc["layoutPage"] = layout_engine_page();
     doc["layoutPages"] = layout_engine_page_count();
   }
-  // Live values for the 4 configured modes + secondary (display units).
+  // Live values for every configured mode slot + secondary (display units).
+  // This array grew from 4 to MODE_SLOTS entries in v2.13.0; it is read by
+  // index, so a client that only knows the first four still works.
   JsonArray live = doc["live"].to<JsonArray>();
-  for (int i = 0; i < 4; i++) {
+  for (int i = 0; i < MODE_SLOTS; i++) {
     int ci = chan_index_from_key(behavior.mode[i].chan_key);
     live.add(chan_display(ci, haltech_value(ci)));
   }
@@ -301,7 +306,7 @@ static void apiThemeCopy() {
 static void apiConfigGet() {
   JsonDocument doc;
   JsonArray modes = doc["modes"].to<JsonArray>();
-  for (int i = 0; i < 4; i++) {
+  for (int i = 0; i < MODE_SLOTS; i++) {
     JsonObject m = modes.add<JsonObject>();
     m["chan"] = behavior.mode[i].chan_key;
     m["label"] = behavior.mode[i].label;
@@ -327,10 +332,16 @@ static void apiConfigSet() {
   JsonDocument doc;
   if (deserializeJson(doc, body) != DeserializationError::Ok) { srv->send(400, "text/plain", "Bad JSON"); return; }
   JsonArray modes = doc["modes"];
-  if (modes.isNull() || modes.size() != 4) { srv->send(400, "text/plain", "Need 4 modes"); return; }
+  // Accept 4..MODE_SLOTS rather than an exact count: a client built against the
+  // old 4-slot API (Gauge Designer, a saved request) posts four, and the slots
+  // it doesn't know about keep their current binding instead of 400-ing.
+  if (modes.isNull() || modes.size() < 4 || modes.size() > MODE_SLOTS) {
+    srv->send(400, "text/plain", "Need 4-" STR(MODE_SLOTS) " modes"); return;
+  }
+  const size_t n_modes = modes.size();
 
   BehaviorConfig b = behavior;
-  for (int i = 0; i < 4; i++) {
+  for (size_t i = 0; i < n_modes; i++) {
     JsonObject m = modes[i];
     uint16_t ck = m["chan"] | behavior.mode[i].chan_key;
     if (chan_index_from_key(ck) < 0) { srv->send(400, "text/plain", "Unknown channel"); return; }
@@ -416,7 +427,7 @@ static void apiFleet() {
              peers[i].mac[0], peers[i].mac[1], peers[i].mac[2],
              peers[i].mac[3], peers[i].mac[4], peers[i].mac[5]);
     o["mac"] = mac;
-    o["mode"] = constrain(peers[i].mode, 0, 3);
+    o["mode"] = constrain(peers[i].mode, 0, MODE_SLOTS - 1);
     o["age"] = now - peers[i].last_seen;
     o["proto"] = peers[i].proto;
     if (peers[i].proto >= 2) {
@@ -445,7 +456,7 @@ static void apiFleetMode() {
   uint8_t mac[6]; bool all;
   if (!parseMacArg(mac, &all)) return;
   if (all || !srv->hasArg("v")) { srv->send(400, "text/plain", "Bad Request"); return; }
-  int m = constrain(srv->arg("v").toInt(), 0, 3);
+  int m = constrain(srv->arg("v").toInt(), 0, MODE_SLOTS - 1);
   send_remote_command(mac, m);
   srv->send(200, "text/plain", "OK");
 }
@@ -485,7 +496,7 @@ static void apiAction() {
   String v = srv->arg("v");
 
   if (name == "mode") {
-    int m = constrain(v.toInt(), 0, 3);
+    int m = constrain(v.toInt(), 0, MODE_SLOTS - 1);
     current_mode = (GaugeMode)m;
     cfg_put_int("mode", m);
     flag_mode_update = true;

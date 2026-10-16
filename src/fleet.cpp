@@ -48,7 +48,23 @@ typedef struct __attribute__((packed)) {
   uint16_t chan[4];           // per-mode registry chan_key
   char label[4][14];          // per-mode gauge face label
   uint8_t units;              // bit0 press_psi, bit1 temp_f, bit2 speed_mph, bit3 lambda_afr
-} PktConfigSync;              // 145 B
+  // --- appended in v2.13.0 (mode slots 5-6) ---
+  // The arrays above stay [4] FOREVER: widening them would move everything
+  // after them and break the prefix read that keeps mixed fleets working. The
+  // extra slots therefore ride along as their own block at the end.
+  float ext_mmin[2], ext_mmax[2], ext_z1[2], ext_z2[2];
+  uint16_t ext_chan[2];
+  char ext_label[2][14];
+} PktConfigSync;              // 209 B
+
+// Both of these are load-bearing. The first says the wire format carries
+// 4 + 2 slots, so bumping MODE_SLOTS again needs another appended block (not a
+// wider array). The second is the hard limit that makes 6 about the practical
+// ceiling for this packet: classic ESP-NOW tops out at 250 B of payload.
+static_assert(MODE_SLOTS == 6,
+  "PktConfigSync carries 4 + 2 mode slots; add a new appended block for more");
+static_assert(sizeof(PktConfigSync) <= 250,
+  "PktConfigSync exceeds the ESP-NOW payload limit — split it into two packets");
 
 typedef struct __attribute__((packed)) { PktHeader h; uint8_t cmd; int32_t value; } PktCmd;  // 9 B
 
@@ -142,7 +158,7 @@ static void handle_v1(const uint8_t *mac, EspNowPacket *pkt) {
   }
   else if (pkt->type == 2) {
     // Remote mode change — applied AND persisted from loop() (no NVS here).
-    pending_mode = constrain(pkt->mode, 0, 3);
+    pending_mode = constrain(pkt->mode, 0, MODE_SLOTS - 1);
     flag_mode_update = true;
   }
   else if (pkt->type == 3) {
@@ -186,7 +202,7 @@ static void handle_v2(const uint8_t *mac, const uint8_t *data, int len) {
       const PktPresence2 *p = (const PktPresence2 *)data;
       uint8_t fw[3] = { p->fw_major, p->fw_minor, p->fw_patch };
       char name[21]; memcpy(name, p->name, 21); name[20] = 0;
-      update_peer(mac, constrain((int)p->mode, 0, 3), 2, p->active_theme, fw, name);
+      update_peer(mac, constrain((int)p->mode, 0, MODE_SLOTS - 1), 2, p->active_theme, fw, name);
       break;
     }
     case PKT_THEME_FULL: {
@@ -207,11 +223,14 @@ static void handle_v2(const uint8_t *mac, const uint8_t *data, int len) {
       break;
     }
     case PKT_CONFIG_SYNC: {
-      // Accept both the v2.0.0 prefix (no channels/labels/units) and the full
-      // v2.1.0 packet — append-only layout keeps mixed fleets working.
-      const size_t OLD_SIZE = offsetof(PktConfigSync, chan);
+      // Three length tiers, because the layout is append-only: the v2.0.0
+      // prefix (ranges/zones only), the v2.1.0 packet (+ channels/labels/
+      // units), and the v2.13.0 packet (+ mode slots 5-6).
+      const size_t OLD_SIZE = offsetof(PktConfigSync, chan);      // v2.0.0
+      const size_t V21_SIZE = offsetof(PktConfigSync, ext_mmin);  // v2.1.0
       if (len < (int)OLD_SIZE) return;
-      bool full = len >= (int)sizeof(PktConfigSync);
+      bool full  = len >= (int)V21_SIZE;             // NOT sizeof: a v2.1.0
+      bool ext   = len >= (int)sizeof(PktConfigSync);// sender is still "full"
       const PktConfigSync *p = (const PktConfigSync *)data;
       taskENTER_CRITICAL(&s_cfg_mux);
       s_pending_cfg = behavior;   // fields the sender doesn't carry stay local
@@ -222,6 +241,18 @@ static void handle_v2(const uint8_t *mac, const uint8_t *data, int len) {
           s_pending_cfg.mode[i].chan_key = p->chan[i];
           memcpy(s_pending_cfg.mode[i].label, p->label[i], sizeof(s_pending_cfg.mode[i].label));
           s_pending_cfg.mode[i].label[sizeof(s_pending_cfg.mode[i].label) - 1] = 0;
+        }
+      }
+      // Slots 4-5 only when the sender actually carried them; otherwise they
+      // keep the local binding (s_pending_cfg started as a copy of behavior).
+      if (ext) {
+        for (int i = 0; i < MODE_SLOTS - 4; i++) {
+          ModeConfig &m = s_pending_cfg.mode[4 + i];
+          m.min = p->ext_mmin[i]; m.max = p->ext_mmax[i];
+          m.z1  = p->ext_z1[i];   m.z2  = p->ext_z2[i];
+          m.chan_key = p->ext_chan[i];
+          memcpy(m.label, p->ext_label[i], sizeof(m.label));
+          m.label[sizeof(m.label) - 1] = 0;
         }
       }
       s_pending_cfg.smoothing = p->smoothing;
@@ -341,11 +372,18 @@ void fleet_push_theme(const uint8_t *mac, uint8_t slot, bool activate) {
 void fleet_push_config(const uint8_t *mac) {
   PktConfigSync p = {};
   p.h.magic = FLEET_MAGIC; p.h.proto = FLEET_PROTO; p.h.type = PKT_CONFIG_SYNC;
-  for (int i = 0; i < 4; i++) {
+  for (int i = 0; i < 4; i++) {   // fixed at 4: wire layout, not MODE_SLOTS
     p.mmin[i] = behavior.mode[i].min; p.mmax[i] = behavior.mode[i].max;
     p.z1[i] = behavior.mode[i].z1;    p.z2[i] = behavior.mode[i].z2;
     p.chan[i] = behavior.mode[i].chan_key;
     memcpy(p.label[i], behavior.mode[i].label, sizeof(p.label[i]));
+  }
+  for (int i = 0; i < MODE_SLOTS - 4; i++) {   // the appended slots 5-6 block
+    const ModeConfig &m = behavior.mode[4 + i];
+    p.ext_mmin[i] = m.min; p.ext_mmax[i] = m.max;
+    p.ext_z1[i] = m.z1;    p.ext_z2[i] = m.z2;
+    p.ext_chan[i] = m.chan_key;
+    memcpy(p.ext_label[i], m.label, sizeof(p.ext_label[i]));
   }
   p.smoothing = behavior.smoothing;
   p.max_rate = behavior.max_rate;

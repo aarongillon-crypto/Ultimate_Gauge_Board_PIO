@@ -109,7 +109,7 @@ void cfg_persist_behavior(const BehaviorConfig& b) {
   if (!write_allowed()) return;
   char k[10];
   preferences.begin("gauge", false);
-  for (uint8_t i = 0; i < 4; i++) {
+  for (uint8_t i = 0; i < MODE_SLOTS; i++) {
     behavior_key(k,i,"ch");  preferences.putUShort(k, b.mode[i].chan_key);
     behavior_key(k,i,"lbl"); preferences.putString(k, b.mode[i].label);
     behavior_key(k,i,"min"); preferences.putFloat(k, b.mode[i].min);
@@ -127,7 +127,7 @@ void cfg_load_behavior(BehaviorConfig* out) {
   char k[10];
   const BehaviorConfig& d = BEHAVIOR_DEFAULTS;
   preferences.begin("gauge", true);
-  for (uint8_t i = 0; i < 4; i++) {
+  for (uint8_t i = 0; i < MODE_SLOTS; i++) {
     behavior_key(k,i,"ch");  out->mode[i].chan_key = preferences.getUShort(k, d.mode[i].chan_key);
     behavior_key(k,i,"lbl");
     String lbl = preferences.getString(k, d.mode[i].label);

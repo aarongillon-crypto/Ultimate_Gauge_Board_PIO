@@ -1,7 +1,7 @@
 // Gauge SPA — talks to the JSON API (see src/web/api.cpp).
 // GET = read, POST = write. Small writes use query args; themes use JSON bodies.
 'use strict';
-var MN = ['M1', 'M2', 'M3', 'M4'];          // generic; local buttons get real labels from config
+var MN = ['M1', 'M2', 'M3', 'M4', 'M5', 'M6'];   // generic; local buttons get real labels from config
 var COLOR_KEYS = ['text','low','mid','high','bg','modeLabel','linkIcon','needle','peak'];
 var themesCache = null;   // /api/themes payload
 var chansCache = [];      // /api/channels payload (registry + live values)
@@ -60,7 +60,7 @@ function renderState(s){
   $('font').textContent = 'Font: ' + (s.font === 0 ? 'DSEG14' : 'Fira Mono');
   $('tpsync').textContent = 'Trim Sync: ' + (s.tpsync ? 'ON' : 'OFF');
   $('tpsync').classList.toggle('on', !!s.tpsync);
-  for (var i = 0; i < 4; i++) $('m'+i).classList.toggle('active', s.mode === i);
+  for (var i = 0; i < MN.length; i++) $('m'+i).classList.toggle('active', s.mode === i);
   $('pg0').classList.toggle('active', s.page === 0);
   $('pg1').classList.toggle('active', s.page === 1);
   state_sec = s.sec;
@@ -291,7 +291,7 @@ function loadConfig(){ return jget('/api/config').then(renderConfig).catch(funct
 function saveConfig(){
   if (!cfgCache) return;
   var modes = [];
-  for (var i = 0; i < 4; i++) {
+  for (var i = 0; i < cfgCache.modes.length; i++) {
     var m = { chan: +$('b_' + i + '_chan').value, label: $('b_' + i + '_label').value.trim() || ('M' + (i+1)) };
     var bad = false;
     BEHAV_FIELDS.forEach(function(f){

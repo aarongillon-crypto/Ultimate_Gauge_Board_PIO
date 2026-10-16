@@ -9,7 +9,12 @@ const BehaviorConfig BEHAVIOR_DEFAULTS = {
   { { (uint16_t)((0x360 << 4) | 2), "BOOST", -15, 30,      0,   20   },  // <0 low, <20 mid, else high
     { (uint16_t)((0x368 << 4) | 0), "AFR",     8, 22,     10,   15   },  // <10 low, <15 mid, else high
     { (uint16_t)((0x3E0 << 4) | 0), "WATER",   0, 120, -9999, 9999   },  // always mid
-    { (uint16_t)((0x361 << 4) | 2), "OIL P",   0, 100, -9999, 9999   } },// always mid
+    { (uint16_t)((0x361 << 4) | 2), "OIL P",   0, 100, -9999, 9999   },  // always mid
+    // Slots 5-6. Zones are deliberately neutral (always mid): on both of these
+    // the dangerous end is LOW, and the zone model colours v<z1 with the slot's
+    // "low" colour — so a useful threshold here needs that colour changed too.
+    { (uint16_t)((0x361 << 4) | 0), "FUEL P",  0, 100, -9999, 9999   },  // always mid
+    { (uint16_t)((0x372 << 4) | 0), "BATT",   10,  16, -9999, 9999   } },// always mid
   0.24f,   // smoothing
   40.0f,   // max_rate units/sec
   30000    // peak_hold_ms

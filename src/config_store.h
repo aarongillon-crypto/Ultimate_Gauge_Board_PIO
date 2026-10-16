@@ -38,3 +38,21 @@ void cfg_load_behavior(BehaviorConfig* out);   // missing keys -> BEHAVIOR_DEFAU
 // Crash-safe boot flag.
 void cfg_mark_boot_started();  // bootok=false — set before risky rendering
 void cfg_mark_boot_ok();       // bootok=true  — set once rendered + backlit
+
+// --- Factory reset ---------------------------------------------------------
+// Erase every key in the "gauge" namespace so the next boot comes up on the
+// compiled-in defaults: themes, behavior (metric slots/ranges/zones), units,
+// brightness, CAN speed, the layout-enable flag — everything persisted.
+//
+// keep_identity preserves the two keys that decide how you REACH the gauge:
+// "devname" (the AP SSID) and "appass" (the WPA2 passphrase). A reset asked for
+// over WiFi therefore doesn't drop the client that asked for it. Pass false for
+// a true out-of-the-box device (AP reverts to OPEN, named from the chip ID).
+//
+// Every cfg_put_*/cfg_persist_* in this module becomes a NO-OP afterwards,
+// until the device reboots. That is deliberate, not a side effect: an ESP-NOW
+// packet from another gauge in the fleet (mode, brightness, a whole theme slot)
+// lands in loop() and persists, so without the lock a fleet member could
+// re-seed the namespace we just cleared during the few hundred ms between the
+// HTTP response and ESP.restart().
+void cfg_factory_reset(bool keep_identity);

@@ -4,25 +4,29 @@
 
 static Preferences preferences;   // sole instance in the firmware
 static TaskHandle_t s_loop_task = nullptr;
+static bool s_wiped = false;      // factory reset done — writes locked until reboot
 
 void cfg_set_loop_task() { s_loop_task = xTaskGetCurrentTaskHandle(); }
 
-// Loud diagnostic (not a crash) if a write sneaks in from the wrong task —
-// blocking flash writes in the ESP-NOW/CAN task context are the bug class
-// that broke "Apply to ALL" for months.
-static void guard_task() {
+// Single gate in front of every write in this module. Returns false when the
+// write must be dropped; loud diagnostic (not a crash) if one sneaks in from
+// the wrong task — blocking flash writes in the ESP-NOW/CAN task context are
+// the bug class that broke "Apply to ALL" for months.
+static bool write_allowed() {
+  if (s_wiped) return false;   // post-factory-reset: never re-seed a cleared key
   if (s_loop_task && xTaskGetCurrentTaskHandle() != s_loop_task) {
     Serial.printf("[CFG][BUG] NVS write from task '%s' — writes must run in loop()!\n",
                   pcTaskGetName(NULL));
   }
+  return true;
 }
 
-void cfg_put_int(const char* key, int v)            { guard_task(); preferences.begin("gauge", false); preferences.putInt(key, v);    preferences.end(); }
-void cfg_put_uint(const char* key, uint32_t v)      { guard_task(); preferences.begin("gauge", false); preferences.putUInt(key, v);   preferences.end(); }
-void cfg_put_uchar(const char* key, uint8_t v)      { guard_task(); preferences.begin("gauge", false); preferences.putUChar(key, v);  preferences.end(); }
-void cfg_put_ushort(const char* key, uint16_t v)    { guard_task(); preferences.begin("gauge", false); preferences.putUShort(key, v); preferences.end(); }
-void cfg_put_bool(const char* key, bool v)          { guard_task(); preferences.begin("gauge", false); preferences.putBool(key, v);   preferences.end(); }
-void cfg_put_string(const char* key, const String& v) { guard_task(); preferences.begin("gauge", false); preferences.putString(key, v); preferences.end(); }
+void cfg_put_int(const char* key, int v)            { if (!write_allowed()) return; preferences.begin("gauge", false); preferences.putInt(key, v);    preferences.end(); }
+void cfg_put_uint(const char* key, uint32_t v)      { if (!write_allowed()) return; preferences.begin("gauge", false); preferences.putUInt(key, v);   preferences.end(); }
+void cfg_put_uchar(const char* key, uint8_t v)      { if (!write_allowed()) return; preferences.begin("gauge", false); preferences.putUChar(key, v);  preferences.end(); }
+void cfg_put_ushort(const char* key, uint16_t v)    { if (!write_allowed()) return; preferences.begin("gauge", false); preferences.putUShort(key, v); preferences.end(); }
+void cfg_put_bool(const char* key, bool v)          { if (!write_allowed()) return; preferences.begin("gauge", false); preferences.putBool(key, v);   preferences.end(); }
+void cfg_put_string(const char* key, const String& v) { if (!write_allowed()) return; preferences.begin("gauge", false); preferences.putString(key, v); preferences.end(); }
 
 // NVS key for one slot field, e.g. "t2_bg" (stays well under the 15-char limit).
 static void theme_key(char *buf, uint8_t slot, const char *field) {
@@ -31,7 +35,7 @@ static void theme_key(char *buf, uint8_t slot, const char *field) {
 
 void cfg_persist_theme_slot(uint8_t slot, const GaugeTheme& t) {
   if (slot >= THEME_SLOTS) return;
-  guard_task();
+  if (!write_allowed()) return;
   char k[8];
   preferences.begin("gauge", false);
   theme_key(k,slot,"tx"); preferences.putUInt(k, t.text);
@@ -74,7 +78,7 @@ void cfg_load_theme_slot(uint8_t slot, const GaugeTheme& d, GaugeTheme* out) {
 
 void cfg_put_theme_name(uint8_t slot, const String& name) {
   if (slot >= THEME_SLOTS) return;
-  guard_task();
+  if (!write_allowed()) return;
   char k[8]; theme_key(k, slot, "nm");
   preferences.begin("gauge", false); preferences.putString(k, name); preferences.end();
 }
@@ -89,7 +93,7 @@ String cfg_load_theme_name(uint8_t slot, const char* dflt) {
 }
 
 void cfg_disable_gradient(uint8_t slot) {
-  guard_task();
+  if (!write_allowed()) return;
   preferences.begin("gauge", false);
   preferences.putUChar("cgt", 0);
   char k[8]; theme_key(k, slot, "gt"); preferences.putUChar(k, 0);
@@ -102,7 +106,7 @@ static void behavior_key(char* buf, uint8_t mode, const char* field) {
 }
 
 void cfg_persist_behavior(const BehaviorConfig& b) {
-  guard_task();
+  if (!write_allowed()) return;
   char k[10];
   preferences.begin("gauge", false);
   for (uint8_t i = 0; i < 4; i++) {
@@ -149,8 +153,8 @@ uint32_t cfg_peek_can_bitrate() {
   return b;
 }
 
-void cfg_mark_boot_started() { guard_task(); preferences.begin("gauge", false); preferences.putBool("bootok", false); preferences.end(); }
-void cfg_mark_boot_ok()      { guard_task(); preferences.begin("gauge", false); preferences.putBool("bootok", true);  preferences.end(); }
+void cfg_mark_boot_started() { if (!write_allowed()) return; preferences.begin("gauge", false); preferences.putBool("bootok", false); preferences.end(); }
+void cfg_mark_boot_ok()      { if (!write_allowed()) return; preferences.begin("gauge", false); preferences.putBool("bootok", true);  preferences.end(); }
 
 bool cfg_load_all(const char* defaultName) {
   preferences.begin("gauge", false);
@@ -195,4 +199,30 @@ bool cfg_load_all(const char* defaultName) {
   preferences.end();
   if (active_theme >= THEME_SLOTS) active_theme = 0;
   return last_boot_completed;
+}
+
+// Wipe the whole namespace in one nvs_erase_all, then (optionally) put the two
+// reachability keys straight back. Done inside a single begin/end so there is
+// never a window where the AP identity is missing from flash.
+void cfg_factory_reset(bool keep_identity) {
+  if (!write_allowed()) return;         // wrong task, or already wiped
+  String name, pass;
+  if (keep_identity) {
+    preferences.begin("gauge", true);
+    name = preferences.getString("devname", "");
+    pass = preferences.getString("appass", "");
+    preferences.end();
+  }
+  preferences.begin("gauge", false);
+  bool ok = preferences.clear();
+  if (keep_identity) {
+    if (name.length()) preferences.putString("devname", name);
+    if (pass.length()) preferences.putString("appass", pass);
+  }
+  preferences.end();
+  // Lock AFTER the restore above, so keep_identity can write through.
+  s_wiped = true;
+  Serial.printf("[CFG] FACTORY RESET: namespace 'gauge' %s (%s) - further writes locked until reboot\n",
+                ok ? "cleared" : "CLEAR FAILED",
+                keep_identity ? "kept device name + AP password" : "cleared everything");
 }

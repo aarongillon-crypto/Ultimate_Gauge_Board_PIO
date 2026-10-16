@@ -9,6 +9,7 @@ var cfgCache = null;      // /api/config payload
 var editing = -1;         // slot open in the editor, -1 = closed
 var liveOpen = false;
 var sniffOpen = false;
+var NL = String.fromCharCode(10);   // confirm() dialogs need real newlines
 
 function $(id){ return document.getElementById(id); }
 function toast(msg, err){
@@ -45,6 +46,17 @@ function renderState(s){
   setTgl('test', 'Test', s.test); setTgl('stats', 'Stats', s.stats);
   setTgl('dbg', 'Debug', s.dbg); setTgl('peak', 'Peak Hold', s.peak);
   setTgl('lyfth', 'Design follows Theme', s.lyfth);
+  setTgl('luse', 'Designer Layout', s.layoutEnabled);
+  var ly = $('lystatus');
+  if (ly) ly.innerHTML = !s.layoutStored
+    ? '<small>No stored layout &mdash; showing the built-in gauge face.</small>'
+    : s.layoutActive
+      ? '<small style="color:#8bc34a">Layout <b>' + esc(s.layoutName || '?') + '</b> is active'
+        + (s.layoutPages > 1 ? ' (page ' + (s.layoutPage + 1) + ' of ' + s.layoutPages + ')' : '')
+        + '.</small>'
+      : '<small style="color:#ff9800">A layout is stored but <b>not running</b> '
+        + (s.layoutEnabled ? '(it failed to load &mdash; check the serial log).'
+                           : '(layouts are switched off below).') + '</small>';
   $('font').textContent = 'Font: ' + (s.font === 0 ? 'DSEG14' : 'Fira Mono');
   $('tpsync').textContent = 'Trim Sync: ' + (s.tpsync ? 'ON' : 'OFF');
   $('tpsync').classList.toggle('on', !!s.tpsync);
@@ -190,6 +202,34 @@ function clearApPass(){
   post('/api/action/appass?v=')
     .then(function(){ $('appass').value = ''; toast('AP is now open — device restarting'); })
     .catch(function(){ toast('Failed to clear password', 1); });
+}
+
+// ---------- reset / recovery ----------
+function wipeLayout(){
+  if (!confirm('Delete the layout stored on this gauge?' + NL + NL
+    + 'The built-in gauge face comes back immediately. Any design not also saved '
+    + 'in Gauge Designer is gone for good.')) return;
+  post('/api/action/layoutwipe?v=CONFIRM')
+    .then(function(){ toast('Stored layout deleted'); refreshState(); })
+    .catch(function(){ toast('Delete failed', 1); });
+}
+// all=1 also clears devname + appass, which changes the SSID and reopens the AP.
+function factoryReset(all){
+  var msg = all
+    ? 'FULL FACTORY RESET' + NL + NL
+      + 'Clears every saved setting, the stored layout, the device name AND the AP '
+      + 'password, then restarts.' + NL + NL
+      + 'The gauge will come back as an OPEN WiFi network named after its chip ID, '
+      + 'so you will have to reconnect to it.'
+    : 'RESET ALL SETTINGS' + NL + NL
+      + 'Clears theme slots, metric slots, ranges, units, brightness, CAN speed and '
+      + 'the stored layout, then restarts.' + NL + NL
+      + 'The device name and AP password are kept, so you stay connected.';
+  if (!confirm(msg)) return;
+  if (!confirm('Last chance — this cannot be undone.' + NL + NL + 'Reset now?')) return;
+  post('/api/action/factory?v=CONFIRM' + (all ? '&id=1' : ''))
+    .then(function(){ toast(all ? 'Factory reset — restarting' : 'Settings reset — restarting'); })
+    .catch(function(){ toast('Reset failed', 1); });
 }
 
 // ---------- channels ----------

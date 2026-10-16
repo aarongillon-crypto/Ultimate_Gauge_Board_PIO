@@ -198,6 +198,30 @@
   recover it if forgotten.</small>
 </div>
 
+<div class="card">
+  <h3>Reset &amp; Recovery</h3>
+  <div id="lystatus"><small>&nbsp;</small></div>
+  <div class="row" style="margin-top:9px">
+    <button id="luse" onclick="tglBtn('luse')" title="Turn the stored Designer layout off without deleting it">Designer Layout: --</button>
+    <button class="danger" onclick="wipeLayout()">Delete Stored Layout</button>
+  </div>
+  <span class="lbl">Reset to defaults</span>
+  <button class="danger" onclick="factoryReset(0)">Reset All Settings (keep name &amp; AP password)</button>
+  <button class="danger" onclick="factoryReset(1)" style="margin-top:9px">Full Factory Reset (clears everything)</button>
+  <small><b>Designer Layout: OFF</b> is the quick fix when a design pushed from
+  Gauge Designer doesn't behave like the other gauges &mdash; a layout binds each
+  element to one fixed channel, so the Display Metric buttons above stop having
+  any visible effect. Turning it off brings the built-in four-metric face
+  straight back and <em>keeps</em> the design on the device.
+  <b>Delete Stored Layout</b> removes it for good.
+  <b>Reset All Settings</b> clears everything saved on this gauge &mdash; theme
+  slots, metric slots, ranges and zones, units, brightness, CAN speed and the
+  stored layout &mdash; then restarts; the device name and AP password are kept so
+  you stay connected. <b>Full Factory Reset</b> clears those two as well, so the
+  gauge comes back as an <b>open</b> network named after its chip ID and you will
+  have to reconnect to it.</small>
+</div>
+
 <div id="perf" style="font:12px/1.5 monospace;text-align:center;opacity:.75;margin-top:8px"></div>
 <footer id="footer"></footer>
 <div class="toast" id="toast"></div>

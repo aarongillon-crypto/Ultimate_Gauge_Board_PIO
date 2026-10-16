@@ -14,3 +14,7 @@ bool layout_store_present();                 // a layout file exists
 String layout_store_read();                  // "" if none/unreadable
 bool layout_store_write(const String& json); // atomic-ish: temp file + rename
 void layout_store_delete();
+
+// Factory-reset flavour of delete: also removes a half-written upload left by
+// a failed POST, so nothing of a pushed design survives on the partition.
+void layout_store_wipe();

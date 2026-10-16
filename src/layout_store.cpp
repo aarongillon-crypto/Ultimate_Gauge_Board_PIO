@@ -42,3 +42,11 @@ bool layout_store_write(const String& json) {
 void layout_store_delete() {
   if (s_mounted) LittleFS.remove(LAYOUT_PATH);
 }
+
+void layout_store_wipe() {
+  if (!s_mounted) return;
+  bool had = LittleFS.exists(LAYOUT_PATH);
+  LittleFS.remove(LAYOUT_PATH);
+  LittleFS.remove(TEMP_PATH);   // a failed/aborted upload can leave this behind
+  Serial.printf("[LAYOUT] Store wiped (%s)\n", had ? "layout removed" : "nothing stored");
+}

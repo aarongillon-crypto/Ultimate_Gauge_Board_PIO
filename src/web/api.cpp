@@ -59,6 +59,12 @@ static void apiState() {
   doc["rMs"]  = (int)lvgl_render_ms;   // flush/DMA render time (excl. vsync wait)
   doc["uiMs"] = perf_frame_ms;    // gauge/layout update time
   doc["layoutActive"] = layout_engine_active();
+  // Stored vs enabled vs active are three different things, and the Reset card
+  // needs all three: a design pushed from Gauge Designer can sit on the
+  // partition while disabled (bootok safe mode turns "luse" off), which looks
+  // exactly like "the gauge ignores my layout" from the UI side.
+  doc["layoutStored"] = layout_store_present();
+  doc["layoutEnabled"] = layout_enabled;
   if (layout_engine_active()) {
     doc["layoutName"] = layout_engine_name();
     doc["layoutPage"] = layout_engine_page();
@@ -593,6 +599,39 @@ static void apiAction() {
     cfg_put_uint("canbaud", b);
     srv->send(200, "text/plain", String(b));
     reboot_at_ms = millis() + 400;   // re-init TWAI cleanly at the new speed on reboot
+  } else if (name == "luse") {
+    // Enable/disable a stored layout WITHOUT deleting it. This is the quick way
+    // back to the built-in four-metric face when a pushed design misbehaves
+    // (e.g. its elements bind one fixed channel, so the Display Metric buttons
+    // appear to do nothing) — the design itself is preserved for another go.
+    layout_enabled = !layout_enabled;
+    cfg_put_bool("luse", layout_enabled);
+    flag_layout_reload = true;   // loop rebuilds: the layout if enabled, else the default face
+    srv->send(200, "text/plain", layout_enabled ? "1" : "0");
+  } else if (name == "layoutwipe") {
+    // Destructive, so it needs the explicit token rather than a bare POST.
+    if (v != "CONFIRM") { srv->send(400, "text/plain", "Needs ?v=CONFIRM"); return; }
+    layout_store_wipe();
+    // Clear a safe-mode disable at the same time, otherwise the next upload
+    // would be stored and then ignored until someone noticed "luse" was off.
+    if (!layout_enabled) { layout_enabled = true; cfg_put_bool("luse", true); }
+    flag_layout_reload = true;
+    srv->send(200, "text/plain", "Stored layout deleted - default face restored");
+  } else if (name == "factory") {
+    // Reset to defaults: clear the NVS namespace + the stored layout, reboot.
+    // ?v=CONFIRM alone keeps the device name and AP password so the client that
+    // asked for it stays connected; &id=1 clears those too (fully out-of-box,
+    // AP reverts to OPEN under the chip-ID name).
+    if (v != "CONFIRM") { srv->send(400, "text/plain", "Needs ?v=CONFIRM"); return; }
+    bool keep_identity = !(srv->hasArg("id") && srv->arg("id") == "1");
+    layout_store_wipe();
+    cfg_factory_reset(keep_identity);   // locks all further NVS writes until reboot
+    srv->send(200, "text/plain", keep_identity
+      ? "Settings reset - restarting (device name + AP password kept)"
+      : "Full factory reset - restarting (AP will be OPEN)");
+    // Longer than the usual 400 ms: the response has to flush before the
+    // restart, and on a wiped device the user has nothing to retry from.
+    reboot_at_ms = millis() + 700;
   } else if (name == "reboot") {
     srv->send(200, "text/plain", "OK");
     reboot_at_ms = millis() + 400;

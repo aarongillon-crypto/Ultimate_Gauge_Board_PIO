@@ -10,6 +10,11 @@ h1::before{content:'';width:5px;height:22px;background:#ff8a00;margin-right:11px
 .card h3{margin:0 0 13px}.lbl{margin:16px 4px 6px;display:block}.card h4{font-size:13px;margin:0 0 6px}
 .row{display:grid;grid-template-columns:1fr 1fr;gap:9px}
 .row3{display:grid;grid-template-columns:1fr 1fr 1fr;gap:9px}
+.row4{display:grid;grid-template-columns:repeat(4,1fr);gap:9px}
+/* Metric buttons carry user-set labels (up to 13 chars) in a quarter-width
+   cell, so they clip with an ellipsis instead of blowing out the grid. */
+button.m{font-size:13px;padding:10px 4px;letter-spacing:0;overflow:hidden;
+         white-space:nowrap;text-overflow:ellipsis}
 button{font-size:15px;padding:11px 10px;border:1px solid #2a2e36;border-radius:8px;background:#1c1f25;color:#e9eaec;cursor:pointer;transition:.13s;width:100%;font-family:inherit;letter-spacing:.5px}
 button:hover{border-color:#ff8a00;background:#23262d}button:active{transform:translateY(1px)}
 button.sm{width:auto;padding:8px 14px;font-size:13px}

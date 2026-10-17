@@ -1,7 +1,7 @@
 // Gauge SPA — talks to the JSON API (see src/web/api.cpp).
 // GET = read, POST = write. Small writes use query args; themes use JSON bodies.
 'use strict';
-var MN = ['M1', 'M2', 'M3', 'M4', 'M5', 'M6'];   // generic; local buttons get real labels from config
+var MN = ['M1', 'M2', 'M3', 'M4', 'M5', 'M6', 'M7', 'M8'];   // generic; local buttons get real labels from config
 var COLOR_KEYS = ['text','low','mid','high','bg','modeLabel','linkIcon','needle','peak'];
 var themesCache = null;   // /api/themes payload
 var chansCache = [];      // /api/channels payload (registry + live values)

@@ -14,7 +14,9 @@ const BehaviorConfig BEHAVIOR_DEFAULTS = {
     // the dangerous end is LOW, and the zone model colours v<z1 with the slot's
     // "low" colour — so a useful threshold here needs that colour changed too.
     { (uint16_t)((0x361 << 4) | 0), "FUEL P",  0, 100, -9999, 9999   },  // always mid
-    { (uint16_t)((0x372 << 4) | 0), "BATT",   10,  16, -9999, 9999   } },// always mid
+    { (uint16_t)((0x372 << 4) | 0), "BATT",   10,  16, -9999, 9999   },  // always mid
+    { (uint16_t)((0x3E2 << 4) | 0), "FUEL L",  0,  60, -9999, 9999   },  // litres
+    { (uint16_t)((0x3E0 << 4) | 6), "OIL T",   0, 150, -9999, 9999   } },// always mid
   0.24f,   // smoothing
   40.0f,   // max_rate units/sec
   30000    // peak_hold_ms

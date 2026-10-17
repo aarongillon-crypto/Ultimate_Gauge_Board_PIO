@@ -9,7 +9,7 @@
 // Bump FIRMWARE_VERSION on each release. FIRMWARE_BUILD is stamped automatically
 // by the compiler every build, so it always changes even if the version is not
 // bumped -- use it to confirm an OTA upload actually took effect.
-#define FIRMWARE_VERSION "2.13.0"
+#define FIRMWARE_VERSION "2.14.0"
 #define FIRMWARE_VER_MAJOR 2
 #define FIRMWARE_VER_MINOR 11
 #define FIRMWARE_VER_PATCH 0
@@ -20,11 +20,12 @@
 // rebindable to any registry channel from the web UI, so treat them as slot
 // indices with a conventional name rather than fixed meanings.
 enum GaugeMode { MODE_BOOST=0, MODE_AFR=1, MODE_WATER=2, MODE_OIL=3,
-                 MODE_FUEL=4, MODE_BATT=5 };
-// Raising this is NOT just a bound: the ESP-NOW config packet is sized for it
-// (see the static_asserts next to PktConfigSync in fleet.cpp) and ESP-NOW caps
-// a payload at 250 B, which 6 slots nearly fills.
-#define MODE_SLOTS 6
+                 MODE_FUEL=4, MODE_BATT=5, MODE_FUELLVL=6, MODE_OILTEMP=7 };
+// Raising this is NOT just a bound: the slots above the first four are synced in
+// their own ESP-NOW packet, which is sized from this (see the static_asserts by
+// PktConfigExt in fleet.cpp). ESP-NOW caps a payload at 250 B and a slot costs
+// 32 B on the wire, so 11 is the ceiling before a third packet is needed.
+#define MODE_SLOTS 8
 enum DisplayPage { PAGE_GAUGE = 0, PAGE_GLOWCRAFT = 1 };
 
 // --- GAUGE BEHAVIOR CONFIG (per-mode channel + ranges/zones + dynamics) ---

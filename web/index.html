@@ -113,14 +113,18 @@
     <button class="sm primary" onclick="act('sec','?v='+document.getElementById('sec').value)">Set</button>
   </div>
   <span class="lbl">Display Metric</span>
-  <div class="row3">
+  <div class="row4">
     <button class="m" id="m0" onclick="setMode(0)">Boost</button>
     <button class="m" id="m1" onclick="setMode(1)">AFR</button>
     <button class="m" id="m2" onclick="setMode(2)">Water</button>
     <button class="m" id="m3" onclick="setMode(3)">Oil P</button>
     <button class="m" id="m4" onclick="setMode(4)">Fuel P</button>
     <button class="m" id="m5" onclick="setMode(5)">Batt</button>
+    <button class="m" id="m6" onclick="setMode(6)">Fuel L</button>
+    <button class="m" id="m7" onclick="setMode(7)">Oil T</button>
   </div>
+  <small>Each button is a slot bound to any Haltech channel &mdash; rename and
+  rebind them in Gauge Behavior below.</small>
 </div>
 
 <div class="card">

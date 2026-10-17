@@ -16,6 +16,7 @@ enum : uint8_t {
   PKT_THEME_FULL  = 0x11,
   PKT_CONFIG_SYNC = 0x12,
   PKT_CMD         = 0x13,
+  PKT_CONFIG_EXT  = 0x14,   // mode slots 4+ (v2.14.0)
 };
 enum : uint8_t { FCMD_IDENTIFY = 0 };
 
@@ -48,23 +49,30 @@ typedef struct __attribute__((packed)) {
   uint16_t chan[4];           // per-mode registry chan_key
   char label[4][14];          // per-mode gauge face label
   uint8_t units;              // bit0 press_psi, bit1 temp_f, bit2 speed_mph, bit3 lambda_afr
-  // --- appended in v2.13.0 (mode slots 5-6) ---
-  // The arrays above stay [4] FOREVER: widening them would move everything
-  // after them and break the prefix read that keeps mixed fleets working. The
-  // extra slots therefore ride along as their own block at the end.
-  float ext_mmin[2], ext_mmax[2], ext_z1[2], ext_z2[2];
-  uint16_t ext_chan[2];
-  char ext_label[2][14];
-} PktConfigSync;              // 209 B
+} PktConfigSync;              // 145 B - FROZEN at the v2.1.0 shape, see below
 
-// Both of these are load-bearing. The first says the wire format carries
-// 4 + 2 slots, so bumping MODE_SLOTS again needs another appended block (not a
-// wider array). The second is the hard limit that makes 6 about the practical
-// ceiling for this packet: classic ESP-NOW tops out at 250 B of payload.
-static_assert(MODE_SLOTS == 6,
-  "PktConfigSync carries 4 + 2 mode slots; add a new appended block for more");
-static_assert(sizeof(PktConfigSync) <= 250,
-  "PktConfigSync exceeds the ESP-NOW payload limit — split it into two packets");
+// Mode slots 4 and up (v2.14.0). Deliberately a second packet rather than more
+// fields on PktConfigSync:
+//   * PktConfigSync's arrays are stuck at [4]. v2.0.0 peers length-check
+//     against their own shorter struct and read the prefix, so widening an
+//     array moves every field after it and corrupts sync in a mixed fleet.
+//   * At 32 B per slot, 8 slots cannot fit one packet anyway: classic ESP-NOW
+//     tops out at 250 B of payload, and 8*32 is 256 B before any header.
+// first/count keep it forward-compatible: a later firmware can send a second
+// block (first=8) without touching this layout at all.
+#define CFG_EXT_SLOTS 4   // slots carried here: 4..7
+typedef struct __attribute__((packed)) {
+  PktHeader h;
+  uint8_t first, count;     // first slot index, how many slots follow
+  float mmin[CFG_EXT_SLOTS], mmax[CFG_EXT_SLOTS], z1[CFG_EXT_SLOTS], z2[CFG_EXT_SLOTS];
+  uint16_t chan[CFG_EXT_SLOTS];
+  char label[CFG_EXT_SLOTS][14];
+} PktConfigExt;             // 134 B
+
+static_assert(MODE_SLOTS <= 4 + CFG_EXT_SLOTS,
+  "mode slots past 7 do not fit PktConfigExt - send a second block with first=8");
+static_assert(sizeof(PktConfigSync) <= 250 && sizeof(PktConfigExt) <= 250,
+  "config packet exceeds the ESP-NOW payload limit");
 
 typedef struct __attribute__((packed)) { PktHeader h; uint8_t cmd; int32_t value; } PktCmd;  // 9 B
 
@@ -223,17 +231,18 @@ static void handle_v2(const uint8_t *mac, const uint8_t *data, int len) {
       break;
     }
     case PKT_CONFIG_SYNC: {
-      // Three length tiers, because the layout is append-only: the v2.0.0
-      // prefix (ranges/zones only), the v2.1.0 packet (+ channels/labels/
-      // units), and the v2.13.0 packet (+ mode slots 5-6).
-      const size_t OLD_SIZE = offsetof(PktConfigSync, chan);      // v2.0.0
-      const size_t V21_SIZE = offsetof(PktConfigSync, ext_mmin);  // v2.1.0
+      // Accept both the v2.0.0 prefix (no channels/labels/units) and the full
+      // v2.1.0 packet - append-only layout keeps mixed fleets working.
+      const size_t OLD_SIZE = offsetof(PktConfigSync, chan);
       if (len < (int)OLD_SIZE) return;
-      bool full  = len >= (int)V21_SIZE;             // NOT sizeof: a v2.1.0
-      bool ext   = len >= (int)sizeof(PktConfigSync);// sender is still "full"
+      bool full = len >= (int)sizeof(PktConfigSync);
       const PktConfigSync *p = (const PktConfigSync *)data;
       taskENTER_CRITICAL(&s_cfg_mux);
-      s_pending_cfg = behavior;   // fields the sender doesn't carry stay local
+      // Seed from the live config ONLY when nothing is staged yet. One push now
+      // arrives as two packets (this one + PKT_CONFIG_EXT) and they have to
+      // merge rather than clobber each other's slots. Fields that no sender
+      // carries stay local either way.
+      if (!s_pending_cfg_valid) { s_pending_cfg = behavior; s_pending_units = 0xFF; }
       for (int i = 0; i < 4; i++) {
         s_pending_cfg.mode[i].min = p->mmin[i]; s_pending_cfg.mode[i].max = p->mmax[i];
         s_pending_cfg.mode[i].z1  = p->z1[i];   s_pending_cfg.mode[i].z2  = p->z2[i];
@@ -243,22 +252,33 @@ static void handle_v2(const uint8_t *mac, const uint8_t *data, int len) {
           s_pending_cfg.mode[i].label[sizeof(s_pending_cfg.mode[i].label) - 1] = 0;
         }
       }
-      // Slots 4-5 only when the sender actually carried them; otherwise they
-      // keep the local binding (s_pending_cfg started as a copy of behavior).
-      if (ext) {
-        for (int i = 0; i < MODE_SLOTS - 4; i++) {
-          ModeConfig &m = s_pending_cfg.mode[4 + i];
-          m.min = p->ext_mmin[i]; m.max = p->ext_mmax[i];
-          m.z1  = p->ext_z1[i];   m.z2  = p->ext_z2[i];
-          m.chan_key = p->ext_chan[i];
-          memcpy(m.label, p->ext_label[i], sizeof(m.label));
-          m.label[sizeof(m.label) - 1] = 0;
-        }
-      }
       s_pending_cfg.smoothing = p->smoothing;
       s_pending_cfg.max_rate = p->max_rate;
       s_pending_cfg.peak_hold_ms = p->peak_hold_ms;
       s_pending_units = full ? p->units : 0xFF;
+      s_pending_cfg_valid = true;
+      taskEXIT_CRITICAL(&s_cfg_mux);
+      break;
+    }
+    case PKT_CONFIG_EXT: {
+      if (len < (int)sizeof(PktConfigExt)) return;
+      const PktConfigExt *p = (const PktConfigExt *)data;
+      // Only the 4..7 block exists today: ignore anything else rather than
+      // guess, and never let a bad count walk off the end of mode[].
+      if (p->first != 4) return;
+      int n = p->count;
+      if (n > CFG_EXT_SLOTS) n = CFG_EXT_SLOTS;
+      if (p->first + n > MODE_SLOTS) n = MODE_SLOTS - p->first;
+      taskENTER_CRITICAL(&s_cfg_mux);
+      if (!s_pending_cfg_valid) { s_pending_cfg = behavior; s_pending_units = 0xFF; }
+      for (int i = 0; i < n; i++) {
+        ModeConfig &m = s_pending_cfg.mode[p->first + i];
+        m.min = p->mmin[i]; m.max = p->mmax[i];
+        m.z1  = p->z1[i];   m.z2  = p->z2[i];
+        m.chan_key = p->chan[i];
+        memcpy(m.label, p->label[i], sizeof(m.label));
+        m.label[sizeof(m.label) - 1] = 0;
+      }
       s_pending_cfg_valid = true;
       taskEXIT_CRITICAL(&s_cfg_mux);
       break;
@@ -378,19 +398,28 @@ void fleet_push_config(const uint8_t *mac) {
     p.chan[i] = behavior.mode[i].chan_key;
     memcpy(p.label[i], behavior.mode[i].label, sizeof(p.label[i]));
   }
-  for (int i = 0; i < MODE_SLOTS - 4; i++) {   // the appended slots 5-6 block
-    const ModeConfig &m = behavior.mode[4 + i];
-    p.ext_mmin[i] = m.min; p.ext_mmax[i] = m.max;
-    p.ext_z1[i] = m.z1;    p.ext_z2[i] = m.z2;
-    p.ext_chan[i] = m.chan_key;
-    memcpy(p.ext_label[i], m.label, sizeof(p.ext_label[i]));
-  }
   p.smoothing = behavior.smoothing;
   p.max_rate = behavior.max_rate;
   p.peak_hold_ms = behavior.peak_hold_ms;
   p.units = (units_press_psi ? 1 : 0) | (units_temp_f ? 2 : 0)
           | (units_speed_mph ? 4 : 0) | (units_lambda_afr ? 8 : 0);
   fleet_send(mac, &p, sizeof(p));
+
+  // Slots 4+ follow in their own packet. A peer on older firmware ignores the
+  // unknown type and keeps its own bindings for those slots. The receiver
+  // merges the two, so arrival order does not matter; if loop() happens to
+  // consume between them it just applies the config twice.
+  PktConfigExt e = {};
+  e.h.magic = FLEET_MAGIC; e.h.proto = FLEET_PROTO; e.h.type = PKT_CONFIG_EXT;
+  e.first = 4; e.count = MODE_SLOTS - 4;
+  for (int i = 0; i < MODE_SLOTS - 4; i++) {
+    const ModeConfig &m = behavior.mode[4 + i];
+    e.mmin[i] = m.min; e.mmax[i] = m.max;
+    e.z1[i] = m.z1;    e.z2[i] = m.z2;
+    e.chan[i] = m.chan_key;
+    memcpy(e.label[i], m.label, sizeof(e.label[i]));
+  }
+  fleet_send(mac, &e, sizeof(e));
 }
 
 void fleet_send_identify(const uint8_t *mac) {
